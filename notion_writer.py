@@ -1,15 +1,21 @@
 """Upsert enrichment results into a Notion database via the REST API.
 
-Stdlib-only (urllib + json). One row per article URL — query by title to
-update if it already exists, else create a new page.
+Stdlib-only (urllib + json). One row per article URL — query by the article
+URL property to find an existing page, then update or create.
 
-Database schema (created automatically if needed):
-    Article URL  - title
+Schema:
+    <title>      - title       (holds the person's full name)
+    Article URL  - url
+    Company      - rich_text
     LinkedIn     - url
     Instagram    - url
     Category     - select
     Status       - select  (ok | error)
     Error        - rich_text
+
+The title property's exact name varies — Notion lets the user rename it. The
+script picks up whatever name the existing database uses (e.g. "Name",
+"Title", "Person") and treats it as the name column.
 """
 
 from __future__ import annotations
@@ -21,6 +27,28 @@ from urllib.request import Request, urlopen
 
 API_VERSION = "2022-06-28"
 BASE = "https://api.notion.com/v1"
+
+
+_NON_TITLE_DEFAULTS: list[tuple[str, str, dict[str, Any]]] = [
+    ("article_url", "Article URL", {"url": {}}),
+    ("company", "Company", {"rich_text": {}}),
+    ("linkedin", "LinkedIn", {"url": {}}),
+    ("instagram", "Instagram", {"url": {}}),
+    ("category", "Category", {"select": {}}),
+    (
+        "status",
+        "Status",
+        {
+            "select": {
+                "options": [
+                    {"name": "ok", "color": "green"},
+                    {"name": "error", "color": "red"},
+                ]
+            }
+        },
+    ),
+    ("error", "Error", {"rich_text": {}}),
+]
 
 
 def _request(method: str, url: str, token: str, body: dict | None = None) -> dict:
@@ -39,29 +67,14 @@ def _request(method: str, url: str, token: str, body: dict | None = None) -> dic
         raise RuntimeError(f"Notion API {exc.code}: {detail}") from exc
 
 
-_REQUIRED_NON_TITLE = {
-    "Name": {"rich_text": {}},
-    "Company": {"rich_text": {}},
-    "LinkedIn": {"url": {}},
-    "Instagram": {"url": {}},
-    "Category": {"select": {}},
-    "Status": {
-        "select": {
-            "options": [
-                {"name": "ok", "color": "green"},
-                {"name": "error", "color": "red"},
-            ]
-        }
-    },
-    "Error": {"rich_text": {}},
-}
-
-
 def create_database(token: str, parent_page_id: str, title: str = "AI Enrich") -> str:
+    properties: dict[str, Any] = {"Name": {"title": {}}}
+    for _canonical, default_name, schema in _NON_TITLE_DEFAULTS:
+        properties[default_name] = schema
     body = {
         "parent": {"type": "page_id", "page_id": parent_page_id},
         "title": [{"type": "text", "text": {"content": title}}],
-        "properties": {"Article URL": {"title": {}}, **_REQUIRED_NON_TITLE},
+        "properties": properties,
     }
     result = _request("POST", f"{BASE}/databases", token, body)
     return result["id"]
@@ -71,12 +84,16 @@ def fetch_database(token: str, db_id: str) -> dict:
     return _request("GET", f"{BASE}/databases/{db_id}", token)
 
 
-def ensure_schema(token: str, db_id: str) -> dict[str, str]:
-    """Adapt to whatever schema the database has.
+def _alternate_name(default_name: str) -> str:
+    return f"{default_name} (link)" if default_name == "Article URL" else f"{default_name} (text)"
 
-    Detects the existing title property's name (every DB has exactly one).
-    Adds any of LinkedIn / Instagram / Category / Status / Error that are
-    missing. Returns a map from canonical key -> actual Notion property name.
+
+def ensure_schema(token: str, db_id: str) -> dict[str, str]:
+    """Adapt to the database's actual schema.
+
+    Picks up the existing title property (whatever it's named) and treats it
+    as the person-name column. Adds any missing non-title columns. Returns a
+    map from canonical key -> actual Notion property name.
     """
     db = fetch_database(token, db_id)
     existing = db.get("properties", {})
@@ -89,29 +106,35 @@ def ensure_schema(token: str, db_id: str) -> dict[str, str]:
     if title_name is None:
         raise RuntimeError(f"Database {db_id} has no title property.")
 
-    to_add = {
-        name: schema
-        for name, schema in _REQUIRED_NON_TITLE.items()
-        if name not in existing
-    }
+    names: dict[str, str] = {"title": title_name, "name": title_name}
+    to_add: dict[str, dict[str, Any]] = {}
+
+    for canonical, default_name, schema in _NON_TITLE_DEFAULTS:
+        if default_name in existing:
+            names[canonical] = default_name
+            continue
+        if default_name == title_name:
+            alt = _alternate_name(default_name)
+            names[canonical] = alt
+            to_add[alt] = schema
+        else:
+            names[canonical] = default_name
+            to_add[default_name] = schema
+
     if to_add:
         _request("PATCH", f"{BASE}/databases/{db_id}", token, {"properties": to_add})
 
-    return {
-        "title": title_name,
-        "name": "Name",
-        "company": "Company",
-        "linkedin": "LinkedIn",
-        "instagram": "Instagram",
-        "category": "Category",
-        "status": "Status",
-        "error": "Error",
-    }
+    return names
 
 
-def find_page_by_url(token: str, db_id: str, article_url: str, title_prop: str) -> str | None:
+def find_page_by_url(
+    token: str, db_id: str, article_url: str, names: dict[str, str]
+) -> str | None:
     body = {
-        "filter": {"property": title_prop, "title": {"equals": article_url}},
+        "filter": {
+            "property": names["article_url"],
+            "url": {"equals": article_url},
+        },
         "page_size": 1,
     }
     result = _request("POST", f"{BASE}/databases/{db_id}/query", token, body)
@@ -133,12 +156,13 @@ def _text_property(value: str) -> dict[str, Any]:
 
 
 def _build_properties(row: dict[str, str], names: dict[str, str]) -> dict[str, Any]:
+    person_name = (row.get("name") or "").strip() or "Not found"
     error_text = row.get("error", "") or ""
     return {
         names["title"]: {
-            "title": [{"type": "text", "text": {"content": row.get("url", "")}}]
+            "title": [{"type": "text", "text": {"content": person_name}}]
         },
-        names["name"]: _text_property(row.get("name", "")),
+        names["article_url"]: _url_property(row.get("url", "")),
         names["company"]: _text_property(row.get("company", "")),
         names["linkedin"]: _url_property(row.get("linkedin", "")),
         names["instagram"]: _url_property(row.get("instagram", "")),
@@ -154,7 +178,7 @@ def _build_properties(row: dict[str, str], names: dict[str, str]) -> dict[str, A
 
 def upsert(token: str, db_id: str, row: dict[str, str], names: dict[str, str]) -> str:
     article_url = row.get("url", "")
-    page_id = find_page_by_url(token, db_id, article_url, names["title"])
+    page_id = find_page_by_url(token, db_id, article_url, names)
     properties = _build_properties(row, names)
     if page_id:
         _request("PATCH", f"{BASE}/pages/{page_id}", token, {"properties": properties})

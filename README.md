@@ -45,14 +45,18 @@ the prompts.
 
    | Property      | Type      |
    | ------------- | --------- |
-   | Article URL   | Title     |
-   | Name          | Rich text |
+   | Name          | Title     |
+   | Article URL   | URL       |
    | Company       | Rich text |
    | LinkedIn      | URL       |
    | Instagram     | URL       |
    | Category      | Select    |
    | Status        | Select    |
    | Error         | Rich text |
+
+The title column can be named anything in your database — the script picks up
+whatever it's called and treats it as the person-name field. Dedup uses the
+`Article URL` property, not the title.
 
 Rows are upserted by article URL — re-running won't create duplicates.
 
