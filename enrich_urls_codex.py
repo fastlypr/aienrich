@@ -312,6 +312,20 @@ def main() -> int:
         print("WARN: no Notion database id; skipping Notion writes.", file=sys.stderr)
         use_notion = False
 
+    notion_props: dict[str, str] = {}
+    if use_notion:
+        try:
+            notion_props = notion_writer.ensure_schema(
+                cfg["notion_token"], cfg["notion_db_id"]
+            )
+        except Exception as exc:
+            print(
+                f"WARN: could not prepare Notion database schema: {exc}; "
+                "skipping Notion writes.",
+                file=sys.stderr,
+            )
+            use_notion = False
+
     if not args.no_sheet and cfg.get("sheet_url"):
         try:
             print(f"Fetching URLs from Google Sheet (column: {cfg.get('sheet_column', 'URL')})...")
@@ -398,7 +412,9 @@ def main() -> int:
             append_result(output_path, row)
             if use_notion:
                 try:
-                    notion_writer.upsert(cfg["notion_token"], cfg["notion_db_id"], row)
+                    notion_writer.upsert(
+                        cfg["notion_token"], cfg["notion_db_id"], row, notion_props
+                    )
                 except Exception as notion_exc:
                     print(f"WARN: Notion write failed: {notion_exc}", file=sys.stderr)
         except Exception as exc:
@@ -414,7 +430,9 @@ def main() -> int:
             append_result(output_path, row)
             if use_notion:
                 try:
-                    notion_writer.upsert(cfg["notion_token"], cfg["notion_db_id"], row)
+                    notion_writer.upsert(
+                        cfg["notion_token"], cfg["notion_db_id"], row, notion_props
+                    )
                 except Exception as notion_exc:
                     print(f"WARN: Notion write failed: {notion_exc}", file=sys.stderr)
             print(f"ERROR: {exc}", file=sys.stderr)
