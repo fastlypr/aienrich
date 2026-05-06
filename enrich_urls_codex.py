@@ -38,71 +38,136 @@ CSV_FIELDS = [
 ]
 
 
-PROMPT_RULES = """Extract the main person featured in the article from the provided URL.
+PROMPT_RULES = """# Profile Enricher
 
-For that person, return:
+This skill takes article URLs and returns, for each one:
 
-- Full name (exact spelling from the article)
-- Company or organization they are associated with
-- LinkedIn profile URL
-- Instagram profile URL
+1. The person's full name
+2. Their company or organization
+3. The LinkedIn profile URL of the main person featured
+4. The Instagram profile URL of the same person
+5. A 1 to 2 word professional category in lowercase
 
-Use intelligent matching to ensure accuracy:
+## Workflow per URL
 
-- Combine full name + company/organization
-- Cross-check job title, location, industry, or achievements
-- Prefer verified or highly relevant profiles
-- Avoid profiles with mismatched details (wrong company, different person with same name, etc.)
+### Step 1: Identify the main person
 
-If multiple profiles exist, return the most likely correct one based on strongest relevance.
+Fetch the article. The main person is the subject of the article, typically:
 
-If no reliable match is found, return "Not found" instead of guessing.
+1. The interviewee in a Q&A or feature
+2. The founder/executive being profiled
+3. The named subject in the headline
 
-Then, based on the person's LinkedIn profile, generate their professional role or industry as a single phrase of 1-2 words only. The output must be lowercase and singular.
+Ignore quoted experts, journalists, photographers, and supporting names. If multiple people are co-featured equally, pick the one named first in the headline or byline subject.
 
-If unable to determine the role or industry clearly, return: public figure
+Extract:
 
-Rules for the role/category:
+1. Full name (exact spelling from the article)
+2. Company or organization
+3. Job title
+4. Location (if mentioned)
+5. Industry or field
+6. Notable achievements mentioned
 
-- Output exactly one phrase containing 1 or 2 words only
-- Output only the phrase, with no punctuation, special characters, or extra words
-- Do not add sentences, explanations, names, locations, or descriptions
-- If multiple roles are present, choose the primary or most relevant one
-- If unclear or no role found, output: public figure
+If you cannot identify a clear main person, output the "not found" JSON for this URL.
 
-If you cannot determine the person's name or company from the article, use "Not found" for that field.
+### Step 2: Find LinkedIn
 
-Return the final output in this exact JSON format:
+Search for the person using combinations like:
 
-{
-  "name": "",
-  "company": "",
-  "linkedin": "",
-  "instagram": "",
-  "category": ""
-}
+1. `"Full Name" "Company" site:linkedin.com/in`
+2. `"Full Name" "Job Title" site:linkedin.com/in`
+3. `"Full Name" "City" site:linkedin.com/in`
 
-Examples of valid categories:
-real estate expert
-fitness coach
-tech entrepreneur
-entrepreneur
-music artist
-business leader
-attorney
-financial advisor
-motivational speaker
-healthcare professional
-film director
-content creator
-life coach
-digital marketer
-software engineer
-fashion designer
-public figure
+Match criteria, in priority order:
 
-Output rules:
-- Return only valid JSON. No markdown fences. No commentary or reasoning.
+1. Company name on LinkedIn matches the article
+2. Job title aligns with article
+3. Location matches
+4. Industry aligns
+
+Reject a candidate if any of the following is true:
+
+1. Different company with no plausible career overlap
+2. Different country/region with no relocation evidence
+3. Different industry entirely
+4. Same name but different person (verify with at least one corroborating detail)
+
+If no candidate clears the bar, return `"Not found"` for the LinkedIn field. Do not guess.
+
+### Step 3: Find Instagram
+
+Search using:
+
+1. `"Full Name" "Company" site:instagram.com`
+2. `"Full Name" site:instagram.com` combined with industry or city
+3. Check the LinkedIn profile (if found) for a linked Instagram handle, which is the strongest signal
+
+Match criteria:
+
+1. Bio mentions company, role, or industry from the article
+2. Verified badge is a strong positive signal
+3. Photos or content match the person's public image
+4. Handle is plausibly tied to the name
+
+Reject if:
+
+1. Private account with no bio matching the person
+2. Fan accounts, parody accounts, or namesakes
+3. Bio describes an unrelated profession or location
+
+If no reliable match, return `"Not found"`. Do not guess.
+
+### Step 4: Generate the category
+
+Use the LinkedIn profile (preferred) or, if LinkedIn was not found, the article itself to determine the role.
+
+Rules:
+
+1. Output exactly one phrase of 1 or 2 words
+2. Lowercase only
+3. Singular only (write "entrepreneur" not "entrepreneurs")
+4. No punctuation, no quotes, no extra words
+5. Do not include the person's name, location, or company
+6. If multiple roles exist, pick the primary one (the one the article centers on)
+7. If unclear, output `public figure`
+
+Reference categories (not exhaustive, use whichever fits best):
+
+real estate expert, fitness coach, tech entrepreneur, entrepreneur, music artist, business leader, attorney, financial advisor, motivational speaker, healthcare professional, film director, content creator, life coach, digital marketer, software engineer, fashion designer, public figure
+
+You may use other 1 to 2 word phrases that better fit the person, as long as they follow the rules above.
+
+### Step 5: Output
+
+Return strict JSON in this exact shape:
+
+```json
+{ "name": "", "company": "", "linkedin": "", "instagram": "", "category": "" }
+```
+
+Use the literal string `"Not found"` (with capital N) for the name, company, linkedin, and instagram fields when no reliable match exists. The category field should always be filled, defaulting to `public figure` if the role cannot be determined.
+
+## Anti-hallucination rules
+
+1. Never fabricate a LinkedIn or Instagram URL. If you have not actually verified the profile exists and matches, return "Not found".
+2. Do not assume a handle from the person's name. Always verify by visiting or searching.
+3. If search results are ambiguous between two people with the same name, return "Not found" for that field unless you have at least two corroborating details (company AND role, or company AND location).
+4. Do not output any commentary, reasoning, or extra text alongside the JSON. The JSON line is the entire output for that URL.
+
+## Edge cases
+
+1. Article paywalled or unfetchable: try cached/archive versions; if still no access, output `{ "name": "Not found", "company": "Not found", "linkedin": "Not found", "instagram": "Not found", "category": "public figure" }`.
+2. Article is about a company, not a person: identify the founder or CEO if clearly the focus, otherwise treat as no main person and output "Not found" for name/company/linkedin/instagram and "public figure" for category.
+3. Article features multiple people equally: pick the one named first in the headline.
+4. Person has no LinkedIn (e.g., celebrity, athlete): return "Not found" for LinkedIn, still try Instagram.
+5. Person is deceased: still attempt to find their archived profiles if they exist.
+
+## Output format rules
+
+- Return only valid JSON.
+- No markdown fences around the JSON.
+- No commentary, reasoning, or explanation alongside the JSON.
 - Do not write files.
 """
 

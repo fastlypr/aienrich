@@ -36,41 +36,81 @@ CSV_FIELDS = [
 ]
 
 
-INSTRUCTIONS = """Extract the main person featured in the article from the provided URL.
+INSTRUCTIONS = """# Profile Enricher
 
-For that person, return:
+For each article URL, identify the main person featured and return their full
+name, company, LinkedIn profile URL, Instagram profile URL, and a 1-2 word
+professional category.
 
-- Full name (exact spelling from the article)
-- Company or organization they are associated with
-- LinkedIn profile URL
-- Instagram profile URL
+## Step 1: Identify the main person
 
-Use intelligent matching to ensure accuracy:
+The main person is the subject of the article — interviewee, founder/executive
+being profiled, or the named subject in the headline. Ignore quoted experts,
+journalists, photographers, and supporting names. If multiple people are
+co-featured equally, pick the one named first in the headline.
 
-- Combine full name + company/organization
-- Cross-check job title, location, industry, or achievements
-- Prefer verified or highly relevant profiles
-- Avoid profiles with mismatched details (wrong company, different person with same name, etc.)
+Extract: full name (exact spelling), company/organization, job title, location
+(if mentioned), industry/field, notable achievements.
 
-If multiple profiles exist, return the most likely correct one based on strongest relevance.
+If you cannot identify a clear main person, return "Not found" for name,
+company, linkedin, and instagram.
 
-If no reliable match is found, return "Not found" instead of guessing.
+## Step 2: Find LinkedIn
 
-Then, based on the person's LinkedIn profile, generate their professional role or industry as a single phrase of 1-2 words only. The output must be lowercase and singular.
+Search using combinations like:
+- `"Full Name" "Company" site:linkedin.com/in`
+- `"Full Name" "Job Title" site:linkedin.com/in`
+- `"Full Name" "City" site:linkedin.com/in`
 
-If unable to determine the role or industry clearly, return: public figure
+Match criteria (priority order): company match, job title alignment, location
+match, industry alignment.
 
-Rules for the role/category:
+Reject if: different company without career overlap, different country without
+relocation evidence, different industry entirely, or same name but different
+person (verify with at least one corroborating detail).
 
-- Output exactly one phrase containing 1 or 2 words only
-- Output only the phrase, with no punctuation, special characters, or extra words
-- Do not add sentences, explanations, names, locations, or descriptions
-- If multiple roles are present, choose the primary or most relevant one
-- If unclear or no role found, output: public figure
+If no candidate clears the bar, return "Not found". Do not guess.
 
-If you cannot determine the person's name or company from the article, use "Not found" for that field.
+## Step 3: Find Instagram
 
-Return the final output in this exact JSON format:
+Search using:
+- `"Full Name" "Company" site:instagram.com`
+- `"Full Name" site:instagram.com` with industry or city
+- Check the LinkedIn profile for a linked Instagram handle (strongest signal)
+
+Accept if: bio mentions company/role/industry from the article, verified badge,
+content matches the person's public image, handle is plausibly tied to the
+name.
+
+Reject if: private account without matching bio, fan/parody/namesake account,
+bio describes unrelated profession or location.
+
+If no reliable match, return "Not found".
+
+## Step 4: Category
+
+Use the LinkedIn profile (preferred) or the article to determine the role.
+Output exactly one lowercase, singular phrase of 1 or 2 words. No punctuation,
+quotes, names, locations, or descriptions. If multiple roles, pick the primary
+one. If unclear, output `public figure`.
+
+Reference categories (not exhaustive): real estate expert, fitness coach, tech
+entrepreneur, entrepreneur, music artist, business leader, attorney, financial
+advisor, motivational speaker, healthcare professional, film director, content
+creator, life coach, digital marketer, software engineer, fashion designer,
+public figure.
+
+## Anti-hallucination rules
+
+1. Never fabricate a LinkedIn or Instagram URL. Verify before returning.
+2. Do not assume a handle from the person's name.
+3. If results are ambiguous between two people with the same name, return
+   "Not found" unless you have at least two corroborating details (company
+   AND role, or company AND location).
+
+## Output
+
+Return only valid JSON in this exact shape, no markdown fences, no commentary:
 
 {
   "name": "",
@@ -80,27 +120,8 @@ Return the final output in this exact JSON format:
   "category": ""
 }
 
-Examples of valid categories:
-real estate expert
-fitness coach
-tech entrepreneur
-entrepreneur
-music artist
-business leader
-attorney
-financial advisor
-motivational speaker
-healthcare professional
-film director
-content creator
-life coach
-digital marketer
-software engineer
-fashion designer
-public figure
-
-Output rules:
-- Return only valid JSON. No markdown fences. No commentary.
+Use the literal string "Not found" (capital N) for any field that cannot be
+reliably determined. Category always defaults to "public figure" if unclear.
 """
 
 
