@@ -1,0 +1,23 @@
+# Local config — contains the Notion token, never commit
+.aienrich_config.json
+
+# Codex session id from the last run
+.codex_enrich_session
+
+# Per-user data
+results.csv
+urls.txt
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtualenvs
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
