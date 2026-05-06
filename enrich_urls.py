@@ -32,32 +32,66 @@ CSV_FIELDS = [
 ]
 
 
-INSTRUCTIONS = """You are an accurate profile enrichment assistant.
+INSTRUCTIONS = """Extract the main person featured in the article from the provided URL.
 
-For each URL:
-1. Extract the main person featured in the article.
-2. Find their official online profiles:
-   - LinkedIn profile URL
-   - Instagram profile URL
-3. Use intelligent matching:
-   - Combine full name + company/organization
-   - Cross-check job title, location, industry, or achievements
-   - Prefer verified or highly relevant profiles
-   - Avoid profiles with mismatched details
-4. If no reliable match is found, return "Not found" instead of guessing.
-5. Based on the person's LinkedIn profile, generate their professional role
-   or industry as a single lowercase singular phrase of 1 or 2 words only.
-   If unclear, use "public figure".
+Then find their official online profiles, specifically:
 
-The "article_url" field must contain the exact URL provided as input, unchanged.
+- LinkedIn profile URL
+- Instagram profile URL
 
-Return only valid JSON in exactly this shape:
+Use intelligent matching to ensure accuracy:
+
+- Combine full name + company/organization
+- Cross-check job title, location, industry, or achievements
+- Prefer verified or highly relevant profiles
+- Avoid profiles with mismatched details (wrong company, different person with same name, etc.)
+
+If multiple profiles exist, return the most likely correct one based on strongest relevance.
+
+If no reliable match is found, return "Not found" instead of guessing.
+
+Then, based on the person's LinkedIn profile, generate their professional role or industry as a single phrase of 1-2 words only. The output must be lowercase and singular.
+
+If unable to determine the role or industry clearly, return: public figure
+
+Rules for the role/category:
+
+- Output exactly one phrase containing 1 or 2 words only
+- Output only the phrase, with no punctuation, special characters, or extra words
+- Do not add sentences, explanations, names, locations, or descriptions
+- If multiple roles are present, choose the primary or most relevant one
+- If unclear or no role found, output: public figure
+
+Return the final output in this exact JSON format:
+
 {
-  "article_url": "",
   "linkedin": "",
   "instagram": "",
   "category": ""
 }
+
+Examples of valid categories:
+real estate expert
+fitness coach
+tech entrepreneur
+entrepreneur
+music artist
+business leader
+attorney
+financial advisor
+motivational speaker
+healthcare professional
+film director
+content creator
+life coach
+digital marketer
+software engineer
+fashion designer
+public figure
+
+Output rules:
+- Return only valid JSON. No markdown fences. No commentary.
+- Do not include the person's name in the output.
 """
 
 
@@ -182,7 +216,6 @@ def extract_json(text: str) -> dict[str, str]:
         raise ValueError("Model output was not a JSON object")
 
     return {
-        "article_url": str(data.get("article_url") or "").strip(),
         "linkedin": str(data.get("linkedin") or "Not found").strip(),
         "instagram": str(data.get("instagram") or "Not found").strip(),
         "category": str(data.get("category") or "public figure").strip().lower(),
