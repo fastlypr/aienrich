@@ -22,6 +22,7 @@ from typing import Any
 import config
 import notion_writer
 import sheets_fetcher
+import url_utils
 
 
 CSV_FIELDS = [
@@ -166,10 +167,16 @@ def load_urls(path: Path) -> list[str]:
         raise FileNotFoundError(f"Input file not found: {path}")
 
     urls: list[str] = []
+    seen: set[str] = set()
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
-        if line and not line.startswith("#"):
-            urls.append(line)
+        if not line or line.startswith("#"):
+            continue
+        normalized = url_utils.normalize(line)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        urls.append(normalized)
     return urls
 
 
@@ -188,7 +195,9 @@ def read_existing(path: Path) -> set[str]:
     with path.open("r", newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
             if row.get("url") and row.get("status") == "ok":
-                processed.add(row["url"])
+                normalized = url_utils.normalize(row["url"])
+                if normalized:
+                    processed.add(normalized)
     return processed
 
 
@@ -378,7 +387,10 @@ def main() -> int:
 
     ensure_csv(output_path)
     processed = read_existing(output_path)
-    remaining = [url for url in urls if url not in processed]
+    remaining = [url for url in urls if url_utils.normalize(url) not in processed]
+    skipped = len(urls) - len(remaining)
+    if skipped:
+        print(f"Skipping {skipped} URL(s) already processed (smart dedup).")
 
     if not remaining:
         print("No new URLs to process.")

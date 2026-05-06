@@ -20,6 +20,8 @@ from typing import Any
 
 from openai import OpenAI
 
+import url_utils
+
 
 CSV_FIELDS = [
     "url",
@@ -158,11 +160,16 @@ def load_urls(path: Path) -> list[str]:
         raise FileNotFoundError(f"Input file not found: {path}")
 
     urls: list[str] = []
+    seen: set[str] = set()
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        urls.append(line)
+        normalized = url_utils.normalize(line)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        urls.append(normalized)
     return urls
 
 
@@ -189,7 +196,9 @@ def read_existing(path: Path) -> tuple[set[str], str | None]:
             status = (row.get("status") or "").strip()
             response_id = (row.get("response_id") or "").strip()
             if url and status == "ok":
-                processed.add(url)
+                normalized = url_utils.normalize(url)
+                if normalized:
+                    processed.add(normalized)
             if response_id:
                 last_response_id = response_id
 
@@ -254,7 +263,10 @@ def main() -> int:
     if args.fresh_session:
         previous_response_id = None
 
-    remaining = [url for url in urls if url not in processed]
+    remaining = [url for url in urls if url_utils.normalize(url) not in processed]
+    skipped = len(urls) - len(remaining)
+    if skipped:
+        print(f"Skipping {skipped} URL(s) already processed (smart dedup).")
     if not remaining:
         print("No new URLs to process.")
         return 0

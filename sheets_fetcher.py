@@ -11,6 +11,8 @@ import io
 import re
 from urllib.request import urlopen
 
+import url_utils
+
 _SHEET_ID_RE = re.compile(r"/spreadsheets/d/([a-zA-Z0-9-_]+)")
 _GID_RE = re.compile(r"[#&?]gid=([0-9]+)")
 
@@ -56,15 +58,14 @@ def fetch_urls(sheet_url: str, column: str = "URL") -> list[str]:
     urls: list[str] = []
     seen: set[str] = set()
     for row in reader:
-        value = (row.get(target) or "").strip()
-        if not value:
+        raw = (row.get(target) or "").strip()
+        if not raw:
             continue
-        if not value.lower().startswith(("http://", "https://")):
-            if "." not in value or " " in value:
-                continue
-            value = "https://" + value.lstrip("/")
-        if value in seen:
+        if " " in raw or "." not in raw:
             continue
-        seen.add(value)
-        urls.append(value)
+        normalized = url_utils.normalize(raw)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        urls.append(normalized)
     return urls
