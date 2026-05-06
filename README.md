@@ -82,6 +82,43 @@ python3 enrich_urls_codex.py --rotate-after 25
 python3 enrich_urls_codex.py --batch-size 20 --delay 0.5 --batch-delay 10
 ```
 
+## Run as a systemd timer (Ubuntu)
+
+The repo ships a oneshot service + timer that runs the enricher every 30
+minutes. Add a URL to your sheet → next tick picks it up. Already-processed
+URLs are skipped automatically.
+
+Install once:
+
+```bash
+sudo cp systemd/aienrich.service /etc/systemd/system/
+sudo cp systemd/aienrich.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now aienrich.timer
+```
+
+Manage it:
+
+```bash
+# Trigger a run right now (ignores the schedule)
+sudo systemctl start aienrich.service
+
+# See when the next run is scheduled
+systemctl list-timers aienrich.timer
+
+# Watch live logs
+journalctl -u aienrich.service -f
+
+# Stop the recurring runs
+sudo systemctl disable --now aienrich.timer
+```
+
+If `codex` isn't found when the service runs, edit
+`/etc/systemd/system/aienrich.service`, fix the `PATH=` line so it includes
+the directory containing the `codex` binary, then run
+`sudo systemctl daemon-reload`. Find that directory with `which codex` from
+your normal shell.
+
 ## Env var overrides
 
 These take precedence over `.aienrich_config.json` for the run, without being

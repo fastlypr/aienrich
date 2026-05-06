@@ -1,0 +1,13 @@
+[Unit]
+Description=Run AI Enrich every 30 minutes
+
+[Timer]
+# Fire 1 minute after boot, then every 30 minutes after the last run finished.
+OnBootSec=1min
+OnUnitActiveSec=30min
+# If the system was off when a run was due, run it as soon as we're back.
+Persistent=true
+Unit=aienrich.service
+
+[Install]
+WantedBy=timers.target
