@@ -46,6 +46,8 @@ the prompts.
    | Property      | Type      |
    | ------------- | --------- |
    | Article URL   | Title     |
+   | Name          | Rich text |
+   | Company       | Rich text |
    | LinkedIn      | URL       |
    | Instagram     | URL       |
    | Category      | Select    |

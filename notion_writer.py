@@ -40,6 +40,8 @@ def _request(method: str, url: str, token: str, body: dict | None = None) -> dic
 
 
 _REQUIRED_NON_TITLE = {
+    "Name": {"rich_text": {}},
+    "Company": {"rich_text": {}},
     "LinkedIn": {"url": {}},
     "Instagram": {"url": {}},
     "Category": {"select": {}},
@@ -97,6 +99,8 @@ def ensure_schema(token: str, db_id: str) -> dict[str, str]:
 
     return {
         "title": title_name,
+        "name": "Name",
+        "company": "Company",
         "linkedin": "LinkedIn",
         "instagram": "Instagram",
         "category": "Category",
@@ -121,12 +125,21 @@ def _url_property(value: str) -> dict[str, Any]:
     return {"url": None}
 
 
+def _text_property(value: str) -> dict[str, Any]:
+    text = (value or "").strip()
+    if not text:
+        return {"rich_text": []}
+    return {"rich_text": [{"type": "text", "text": {"content": text}}]}
+
+
 def _build_properties(row: dict[str, str], names: dict[str, str]) -> dict[str, Any]:
     error_text = row.get("error", "") or ""
     return {
         names["title"]: {
             "title": [{"type": "text", "text": {"content": row.get("url", "")}}]
         },
+        names["name"]: _text_property(row.get("name", "")),
+        names["company"]: _text_property(row.get("company", "")),
         names["linkedin"]: _url_property(row.get("linkedin", "")),
         names["instagram"]: _url_property(row.get("instagram", "")),
         names["category"]: {"select": {"name": row.get("category") or "public figure"}},

@@ -26,6 +26,8 @@ import sheets_fetcher
 
 CSV_FIELDS = [
     "url",
+    "name",
+    "company",
     "linkedin",
     "instagram",
     "category",
@@ -37,8 +39,10 @@ CSV_FIELDS = [
 
 PROMPT_RULES = """Extract the main person featured in the article from the provided URL.
 
-Then find their official online profiles, specifically:
+For that person, return:
 
+- Full name (exact spelling from the article)
+- Company or organization they are associated with
 - LinkedIn profile URL
 - Instagram profile URL
 
@@ -65,9 +69,13 @@ Rules for the role/category:
 - If multiple roles are present, choose the primary or most relevant one
 - If unclear or no role found, output: public figure
 
+If you cannot determine the person's name or company from the article, use "Not found" for that field.
+
 Return the final output in this exact JSON format:
 
 {
+  "name": "",
+  "company": "",
   "linkedin": "",
   "instagram": "",
   "category": ""
@@ -95,7 +103,6 @@ public figure
 Output rules:
 - Return only valid JSON. No markdown fences. No commentary or reasoning.
 - Do not write files.
-- Do not include the person's name in the output.
 """
 
 
@@ -218,6 +225,8 @@ def extract_json(text: str) -> dict[str, str]:
         category = "public figure"
 
     return {
+        "name": str(data.get("name") or "Not found").strip(),
+        "company": str(data.get("company") or "Not found").strip(),
         "linkedin": str(data.get("linkedin") or "Not found").strip(),
         "instagram": str(data.get("instagram") or "Not found").strip(),
         "category": category,
@@ -430,6 +439,8 @@ def main() -> int:
 
             row = {
                 "url": url,
+                "name": data["name"],
+                "company": data["company"],
                 "linkedin": data["linkedin"],
                 "instagram": data["instagram"],
                 "category": data["category"],
@@ -448,6 +459,8 @@ def main() -> int:
         except Exception as exc:
             row = {
                 "url": url,
+                "name": "Not found",
+                "company": "Not found",
                 "linkedin": "Not found",
                 "instagram": "Not found",
                 "category": "public figure",
