@@ -57,8 +57,12 @@ def fetch_urls(sheet_url: str, column: str = "URL") -> list[str]:
     seen: set[str] = set()
     for row in reader:
         value = (row.get(target) or "").strip()
-        if not value or not value.lower().startswith(("http://", "https://")):
+        if not value:
             continue
+        if not value.lower().startswith(("http://", "https://")):
+            if "." not in value or " " in value:
+                continue
+            value = "https://" + value.lstrip("/")
         if value in seen:
             continue
         seen.add(value)
