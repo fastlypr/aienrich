@@ -10,7 +10,7 @@ WorkingDirectory=/home/fastlypr/aienrich
 # Common locations for python3 and the codex CLI. Adjust if your codex
 # binary lives elsewhere (run `which codex` to confirm).
 Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/fastlypr/.local/bin:/home/fastlypr/.npm-global/bin:/home/fastlypr/.nvm/versions/node/current/bin"
-ExecStart=/usr/bin/python3 enrich_urls_codex.py
+ExecStart=/usr/bin/python3 -u enrich_urls_codex.py
 # Output goes to journald — view with `journalctl -u aienrich -f`
 StandardOutput=journal
 StandardError=journal
