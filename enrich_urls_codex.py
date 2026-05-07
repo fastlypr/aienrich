@@ -25,6 +25,60 @@ import sheets_fetcher
 import url_utils
 
 
+class RateLimitError(RuntimeError):
+    """Raised when Codex reports a usage/rate-limit error.
+
+    Treated as a graceful stop signal — the script exits 0 without writing an
+    error row, and the systemd timer (or a manual re-run) picks up the
+    remaining URLs once the quota resets. Smart dedup ensures already-done
+    URLs aren't re-processed.
+    """
+
+
+def _scan_codex_errors(stdout: str) -> str | None:
+    """Walk Codex's JSON event stream looking for an error/turn.failed message.
+
+    Returns the most recent error message string if any was found, else None.
+    Beats the previous behavior of returning the first line of stdout (which
+    was usually a meaningless thread.started event).
+    """
+    last_msg: str | None = None
+    for raw in stdout.splitlines():
+        line = raw.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        etype = event.get("type", "")
+        if etype == "error":
+            msg = event.get("message")
+            if isinstance(msg, str) and msg:
+                last_msg = msg
+        elif etype == "turn.failed":
+            err = event.get("error")
+            if isinstance(err, dict):
+                msg = err.get("message")
+                if isinstance(msg, str) and msg:
+                    last_msg = msg
+    return last_msg
+
+
+def _is_rate_limit(msg: str | None) -> bool:
+    if not msg:
+        return False
+    lower = msg.lower()
+    return (
+        "usage limit" in lower
+        or "rate limit" in lower
+        or "too many requests" in lower
+        or "quota" in lower
+    )
+
+
 CSV_FIELDS = [
     "url",
     "name",
@@ -379,8 +433,12 @@ def run_codex(
             check=False,
         )
 
+        codex_error = _scan_codex_errors(result.stdout)
+        if _is_rate_limit(codex_error):
+            raise RateLimitError(codex_error or "Codex rate limit hit.")
+
         if result.returncode != 0:
-            message = result.stderr.strip() or result.stdout.strip()
+            message = codex_error or result.stderr.strip() or result.stdout.strip()
             raise RuntimeError(message or f"codex exited with code {result.returncode}")
 
         final_text = output_path.read_text(encoding="utf-8")
@@ -533,6 +591,17 @@ def main() -> int:
                     )
                 except Exception as notion_exc:
                     print(f"WARN: Notion write failed: {notion_exc}", file=sys.stderr)
+        except RateLimitError as rl_exc:
+            print(
+                f"\nCodex rate limit reached: {rl_exc}",
+                file=sys.stderr,
+            )
+            print(
+                f"Stopping. {index - 1} URL(s) processed this run; "
+                f"{len(remaining) - (index - 1)} remaining will be picked up next time.",
+                file=sys.stderr,
+            )
+            return 0
         except Exception as exc:
             row = {
                 "url": url,
