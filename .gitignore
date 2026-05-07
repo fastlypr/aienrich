@@ -6,6 +6,7 @@
 
 # Per-user data
 results.csv
+results_agent.csv
 urls.txt
 
 # Python bytecode

@@ -5,12 +5,16 @@ professional category of the main person featured. URLs come from a public
 Google Sheet (or a local file), results are appended to `results.csv` and
 upserted into a Notion database.
 
-## Two runners
+## Three runners
 
 - **`enrich_urls_codex.py`** — uses the local **Codex CLI** (`codex exec`). One
   long-lived session is reused across URLs, so the skill rules are sent once
-  and only re-sent if the model drifts or after every N URLs. **This is the
-  one you probably want.**
+  and only re-sent if the model drifts or after every N URLs.
+- **`enrich_urls_agent.py`** — multi-stage agent: fetch article → extract
+  facts via NVIDIA NIM → Google search via Apify → rank candidates → verify
+  → category. Deterministic, observable, and avoids Codex usage limits.
+  Writes to `results_agent.csv` so you can A/B compare against the codex
+  runner.
 - **`enrich_urls.py`** — uses the OpenAI Responses API directly (needs
   `OPENAI_API_KEY`). Same enrichment contract.
 
@@ -119,6 +123,41 @@ the directory containing the `codex` binary, then run
 `sudo systemctl daemon-reload`. Find that directory with `which codex` from
 your normal shell.
 
+## Agent runner (NVIDIA + Apify)
+
+Same Google Sheet, same Notion DB — different enrichment engine. Stages:
+
+1. Fetch article HTML.
+2. NVIDIA NIM extracts the main person, company, role, location.
+3. Build site-restricted Google queries from those facts.
+4. Apify Google Search Scraper runs the queries.
+5. Heuristic + NIM picker chooses the best LinkedIn / Instagram URL.
+6. Fetch og:meta on the chosen URLs and demote to "Not found" on mismatch.
+7. NIM produces the 1–2 word category.
+
+Setup:
+
+```bash
+python3 enrich_urls_agent.py --reconfigure
+```
+
+You'll be asked for the existing sheet/Notion settings plus:
+
+- `NVIDIA API key` — from <https://build.nvidia.com> (free tier works).
+- `Apify API token` — from <https://console.apify.com>. Leave blank to skip
+  the LinkedIn/Instagram search step (the agent still extracts name,
+  company, and category).
+
+Then just run it:
+
+```bash
+python3 enrich_urls_agent.py            # all URLs
+python3 enrich_urls_agent.py --limit 5  # smoke-test with 5 URLs
+```
+
+Override the model (default `openai/gpt-oss-120b`) with the `NVIDIA_MODEL`
+env var.
+
 ## Env var overrides
 
 These take precedence over `.aienrich_config.json` for the run, without being
@@ -127,6 +166,9 @@ written back:
 - `NOTION_TOKEN`
 - `NOTION_DB_ID`
 - `AIENRICH_SHEET_URL`
+- `NVIDIA_API_KEY` (agent runner only)
+- `APIFY_TOKEN` (agent runner only)
+- `NVIDIA_MODEL` (agent runner only — defaults to `openai/gpt-oss-120b`)
 
 ## How the Codex session is reused
 
