@@ -56,8 +56,38 @@ def fetch_meta(url: str, timeout: int = 20) -> dict:
     }
 
 
-def is_match(meta: dict, facts: dict) -> bool:
-    """Token-overlap check. True if name (and ideally company) appears."""
+def is_match(meta: dict, facts: dict, url: str = "") -> bool:
+    """True if the URL or meta data plausibly matches the person's facts.
+
+    LinkedIn and Instagram aggressively block unauthenticated meta requests,
+    so og:title / og:description are often generic ("LinkedIn", "Instagram")
+    even on real profile pages. To avoid false demotion, we accept the URL
+    if EITHER signal matches:
+
+      1. The URL slug contains at least half the name tokens (very strong —
+         platform handles like /in/corbin-cornwell or /corbincornwell are
+         picked from the actual person's name)
+      2. The og:title / og:description blob covers at least half the name
+
+    A profile is only demoted when BOTH signals fail.
+    """
+    name = facts.get("name", "").strip()
+    if not name:
+        return True
+
+    name_parts = [
+        p.lower() for p in re.findall(r"[a-zA-Z']+", name) if len(p) > 2
+    ]
+    if not name_parts:
+        return True
+
+    # Signal 1 — URL slug contains the name
+    url_lower = url.lower()
+    url_hits = sum(1 for p in name_parts if p in url_lower)
+    if url_hits / len(name_parts) >= 0.5:
+        return True
+
+    # Signal 2 — meta blob contains the name
     blob = " ".join(
         [
             meta.get("title", ""),
@@ -65,17 +95,9 @@ def is_match(meta: dict, facts: dict) -> bool:
             meta.get("og_description", ""),
         ]
     ).lower()
+    if blob:
+        meta_hits = sum(1 for p in name_parts if p in blob)
+        if meta_hits / len(name_parts) >= 0.5:
+            return True
 
-    if not blob:
-        # No meta available — can't verify, accept conservatively.
-        return True
-
-    name = facts.get("name", "").strip()
-    if name:
-        name_parts = [p.lower() for p in re.findall(r"[a-zA-Z']+", name) if len(p) > 2]
-        if name_parts:
-            present = sum(1 for p in name_parts if p in blob)
-            if present / len(name_parts) < 0.5:
-                return False
-
-    return True
+    return False

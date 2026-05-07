@@ -123,7 +123,7 @@ def enrich_url(
         if record["linkedin"] != "Not found":
             log(f"verifying LinkedIn: {record['linkedin']}")
             linkedin_meta = fetch_meta(record["linkedin"])
-            if not is_match(linkedin_meta, facts):
+            if not is_match(linkedin_meta, facts, url=record["linkedin"]):
                 log("  meta mismatch — demoting to Not found")
                 record["linkedin"] = "Not found"
                 linkedin_meta = {}
@@ -131,7 +131,7 @@ def enrich_url(
         if record["instagram"] != "Not found":
             log(f"verifying Instagram: {record['instagram']}")
             ig_meta = fetch_meta(record["instagram"])
-            if not is_match(ig_meta, facts):
+            if not is_match(ig_meta, facts, url=record["instagram"]):
                 log("  meta mismatch — demoting to Not found")
                 record["instagram"] = "Not found"
 
