@@ -18,7 +18,7 @@ from typing import Any
 from openai import OpenAI
 
 
-DEFAULT_MODEL = os.getenv("NVIDIA_MODEL", "openai/gpt-oss-120b")
+DEFAULT_MODEL = os.getenv("NVIDIA_MODEL", "meta/llama-3.1-70b-instruct")
 BASE_URL = "https://integrate.api.nvidia.com/v1"
 
 
@@ -62,7 +62,15 @@ class NvidiaClient:
             else:
                 raise
 
-        return (resp.choices[0].message.content or "").strip()
+        message = resp.choices[0].message
+        # Some NVIDIA reasoning models (e.g. openai/gpt-oss-120b) return their
+        # final answer in reasoning_content rather than content. Fall back so
+        # those models still work without code changes elsewhere.
+        text = (message.content or "").strip()
+        if not text:
+            reasoning = getattr(message, "reasoning_content", None) or ""
+            text = reasoning.strip()
+        return text
 
     def chat_json(
         self,
