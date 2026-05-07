@@ -111,6 +111,54 @@ class _TextExtractor(HTMLParser):
         return re.sub(r"\s+", " ", full_text).strip()
 
 
+# Section markers — everything from this point in the page is unrelated
+# (recommended articles, footer, etc.) and gets truncated.
+_TRUNCATE_MARKERS = (
+    "More from Contributor Content",
+    "More From Contributor Content",
+    "More from contributor content",
+    "More From",
+    "Recommended Stories",
+    "Recommended stories",
+    "Related Stories",
+    "Related stories",
+    "You might also like",
+    "Read more from",
+    "Trending stories",
+)
+
+# Regex patterns scrubbed inline from the cleaned text. The byline pattern
+# matches an exact "First Last Contributor" form to avoid eating title
+# words. False positives are rare because article bodies don't normally
+# contain "<Capitalized> <Capitalized> Contributor" sequences.
+_BYLINE_RE = re.compile(
+    r"\b[A-Z][a-z]+\s+[A-Z][a-zA-Z']+\s+Contributor\b"
+)
+_LABELS_RE = re.compile(
+    r"\bCONTRIBUTOR\s+CONTENT\b|\bHear this story\b|\bSubscribe Now\b",
+    re.IGNORECASE,
+)
+
+
+def _clean(text: str) -> str:
+    """Trim related-content tails and strip header noise / contributor bylines."""
+    # Truncate at the earliest section marker we find.
+    earliest = len(text)
+    for marker in _TRUNCATE_MARKERS:
+        idx = text.find(marker)
+        if idx != -1 and idx < earliest:
+            earliest = idx
+    text = text[:earliest]
+
+    # Drop labels and the "<First Last> Contributor" byline.
+    text = _LABELS_RE.sub("", text)
+    text = _BYLINE_RE.sub("", text)
+
+    # Collapse whitespace and tidy up stray punctuation that leftover gaps make.
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 def extract_article_text(html: str, max_chars: int = 12000) -> str:
     parser = _TextExtractor()
     try:
@@ -118,7 +166,7 @@ def extract_article_text(html: str, max_chars: int = 12000) -> str:
     except Exception:
         # malformed HTML — keep whatever was collected
         pass
-    text = parser.text()
+    text = _clean(parser.text())
     if len(text) > max_chars:
         text = text[:max_chars] + "..."
     return text
