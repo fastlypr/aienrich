@@ -1,5 +1,6 @@
 # Local config — contains the Notion token, never commit
 .aienrich_config.json
+.env
 
 # Codex session id from the last run
 .codex_enrich_session

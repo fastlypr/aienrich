@@ -110,6 +110,10 @@ def append_row(path: Path, row: dict) -> None:
 def main() -> int:
     args = parse_args()
 
+    # Pull values from .env (if present) before config loads, so env-var
+    # overrides defined there take effect.
+    agent_config.load_dotenv()
+
     cfg = config.load()
     cfg = config.prompt_for_missing(cfg, reconfigure=args.reconfigure)
     cfg = agent_config.prompt_for_agent_keys(cfg, reconfigure=args.reconfigure)
