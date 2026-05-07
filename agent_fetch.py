@@ -10,32 +10,15 @@ from __future__ import annotations
 
 import gzip
 import re
-import ssl
 from html.parser import HTMLParser
 from urllib.request import Request, urlopen
+
+from http_utils import SSL_CONTEXT
 
 
 USER_AGENT = (
     "Mozilla/5.0 (compatible; aienrich/1.0; +https://github.com/fastlypr/aienrich)"
 )
-
-
-def _ssl_context() -> ssl.SSLContext | None:
-    """Build an SSL context that trusts certifi's CA bundle if available.
-
-    On macOS with python.org Python, the default cert store is empty unless
-    you've run /Applications/Python\\ 3.x/Install\\ Certificates.command. To
-    avoid that footgun, we ship our own context backed by certifi (a single
-    pip install). Falls back to the system default if certifi isn't around.
-    """
-    try:
-        import certifi  # type: ignore
-    except ImportError:
-        return None
-    return ssl.create_default_context(cafile=certifi.where())
-
-
-_SSL_CONTEXT = _ssl_context()
 
 
 def fetch_html(url: str, timeout: int = 30) -> str:
@@ -49,8 +32,8 @@ def fetch_html(url: str, timeout: int = 30) -> str:
         },
     )
     open_kwargs = {"timeout": timeout}
-    if _SSL_CONTEXT is not None and url.lower().startswith("https://"):
-        open_kwargs["context"] = _SSL_CONTEXT
+    if SSL_CONTEXT is not None and url.lower().startswith("https://"):
+        open_kwargs["context"] = SSL_CONTEXT
     with urlopen(req, **open_kwargs) as resp:
         body = resp.read()
         if resp.headers.get("Content-Encoding") == "gzip":

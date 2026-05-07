@@ -21,6 +21,8 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from http_utils import SSL_CONTEXT
+
 
 APIFY_BASE = "https://api.apify.com/v2"
 
@@ -32,33 +34,29 @@ APIFY_BASE = "https://api.apify.com/v2"
 def build_queries(facts: dict, platform: str, max_queries: int = 3) -> list[str]:
     """Return up to max_queries Google search strings for the given platform.
 
-    platform must be 'linkedin' or 'instagram'. Queries that lack their
-    required facts are skipped.
+    Queries use the platform name as a keyword rather than a site: operator,
+    because Google's organic ranking surfaces real profile URLs reliably for
+    natural-language queries, and SERP scraper actors handle the operator
+    inconsistently. The rank stage filters returned URLs down to actual
+    linkedin.com/in/ or instagram.com/<handle> profiles.
     """
     name = facts.get("name", "").strip()
-    if not name:
+    if not name or platform not in ("linkedin", "instagram"):
         return []
 
     company = facts.get("company", "").strip()
     role = facts.get("role", "").strip()
     location = facts.get("location", "").strip()
 
-    site_op = {
-        "linkedin": "site:linkedin.com/in",
-        "instagram": "site:instagram.com",
-    }.get(platform)
-    if not site_op:
-        return []
-
     queries: list[str] = []
     if company:
-        queries.append(f'"{name}" "{company}" {site_op}')
+        queries.append(f'"{name}" "{company}" {platform}')
     if role:
-        queries.append(f'"{name}" "{role}" {site_op}')
+        queries.append(f'"{name}" "{role}" {platform}')
     if location:
-        queries.append(f'"{name}" "{location}" {site_op}')
+        queries.append(f'"{name}" "{location}" {platform}')
     if not queries:
-        queries.append(f'"{name}" {site_op}')
+        queries.append(f'"{name}" {platform}')
     return queries[:max_queries]
 
 
@@ -78,16 +76,13 @@ def _build_input_primary(query: str, max_items: int) -> dict:
 
 
 def _build_input_fallback(query: str, max_items: int) -> dict:
-    """Generic Google-search input — works for most SERP actors that accept
-    a newline-separated `queries` field."""
+    """Input shape for actor YNcgn7yiLc72ayYeB — accepts a singular `query`
+    field, similar to the primary actor."""
     return {
-        "queries": query,
-        "resultsPerPage": max_items,
-        "maxPagesPerQuery": 1,
+        "query": query,
+        "maxItems": max_items,
         "countryCode": "us",
         "languageCode": "en",
-        "saveHtml": False,
-        "saveHtmlToKeyValueStore": False,
     }
 
 
@@ -157,8 +152,11 @@ def _run_actor(
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+    open_kwargs: dict[str, Any] = {"timeout": timeout}
+    if SSL_CONTEXT is not None:
+        open_kwargs["context"] = SSL_CONTEXT
     try:
-        with urlopen(req, timeout=timeout) as resp:
+        with urlopen(req, **open_kwargs) as resp:
             body = resp.read().decode("utf-8")
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
@@ -181,17 +179,19 @@ def _run_actor(
     return data
 
 
-# Actor fallback chain. Order matters — primary first.
+# Actor fallback chain. Order matters — primary first. Verified working
+# actor goes first; the cheaper igolaizola/google-search-scraper-ppe is kept
+# as a secondary in case its issues get fixed upstream.
 ACTOR_CHAIN: list[dict[str, Any]] = [
+    {
+        "name": "google-search-fallback (YNcgn7yiLc72ayYeB)",
+        "id": "YNcgn7yiLc72ayYeB",
+        "build_input": _build_input_fallback,
+    },
     {
         "name": "igolaizola/google-search-scraper-ppe",
         "id": "563JCPLOqM1kMmbbP",
         "build_input": _build_input_primary,
-    },
-    {
-        "name": "fallback-google-search",
-        "id": "YNcgn7yiLc72ayYeB",
-        "build_input": _build_input_fallback,
     },
 ]
 
@@ -223,13 +223,30 @@ def search_one_query(
         if hits:
             if verbose:
                 print(
-                    f"    actor {actor['name']} → {len(hits)} hits", flush=True
+                    f"    actor {actor['name']} → {len(hits)} hits "
+                    f"(from {len(items)} raw items)",
+                    flush=True,
                 )
             return hits
         if verbose:
             print(
-                f"    actor {actor['name']} returned 0 hits, trying next", flush=True
+                f"    actor {actor['name']} returned 0 hits "
+                f"(from {len(items)} raw items), trying next",
+                flush=True,
             )
+            if items:
+                first = items[0]
+                if isinstance(first, dict):
+                    if "error" in first:
+                        # Surface the actor's own error message — usually means
+                        # input shape, quota, or proxy issue.
+                        err = first.get("error")
+                        print(f"      actor error: {err}", flush=True)
+                    else:
+                        print(
+                            f"      first item keys: {sorted(first.keys())}",
+                            flush=True,
+                        )
 
     if last_error:
         raise last_error
