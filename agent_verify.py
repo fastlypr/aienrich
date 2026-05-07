@@ -1,7 +1,16 @@
-"""Stage 6: verify a chosen profile URL via og: meta tags.
+"""Stage 6: verify a chosen profile URL.
 
-If the meta data doesn't plausibly mention the person's name and company,
-demote the result to 'Not found' instead of writing a wrong profile.
+LinkedIn and Instagram block unauthenticated meta requests, so og:title and
+og:description from a fresh GET are useless on real profile pages. Instead
+we verify against the Apify search-result snippet (already in memory from
+the search stage). The snippet is essentially the same information Google
+indexed when the page was first crawled — name, role, company, location —
+which is exactly what we need to confirm the match.
+
+Two helpers:
+  - snippet_matches(hit, facts): the new, preferred check
+  - is_match(meta, facts, url): legacy helper kept for the rare case where
+    we already have og:meta from a non-platform site
 """
 
 from __future__ import annotations
@@ -10,6 +19,38 @@ import re
 from html.parser import HTMLParser
 
 from agent_fetch import fetch_html
+
+
+def snippet_matches(hit: dict, facts: dict) -> bool:
+    """True if the search-result hit plausibly matches the person's facts.
+
+    Combines title + description + URL into one blob and checks for at
+    least half the name tokens. The URL slug carries the strongest signal
+    (e.g., /in/corbin-cornwell), title carries headline info, description
+    carries the snippet Google extracted when crawling.
+    """
+    name = facts.get("name", "").strip()
+    if not name:
+        return True
+
+    name_parts = [
+        p.lower() for p in re.findall(r"[a-zA-Z']+", name) if len(p) > 2
+    ]
+    if not name_parts:
+        return True
+
+    blob = " ".join(
+        [
+            hit.get("title", "") or "",
+            hit.get("description", "") or "",
+            hit.get("url", "") or "",
+        ]
+    ).lower()
+    if not blob:
+        return False
+
+    present = sum(1 for p in name_parts if p in blob)
+    return present / len(name_parts) >= 0.5
 
 
 class _MetaParser(HTMLParser):

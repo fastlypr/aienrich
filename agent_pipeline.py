@@ -3,6 +3,11 @@
 Each stage is independent. Failures in one stage degrade gracefully — the
 pipeline still produces a record with 'Not found' for whatever couldn't be
 resolved, rather than aborting.
+
+The verify stage uses the search-result snippet (already in memory from the
+Apify search), not a fresh fetch of the profile page. LinkedIn and
+Instagram block unauthenticated meta requests, so re-fetching wouldn't help
+anyway — the snippet has all the information Google indexed.
 """
 
 from __future__ import annotations
@@ -14,13 +19,21 @@ from agent_fetch import fetch_article_text
 from agent_nvidia import NvidiaClient
 from agent_rank import pick_best
 from agent_search import apify_google_search, build_queries
-from agent_verify import fetch_meta, is_match
+from agent_verify import snippet_matches
 
 
-def _category(facts: dict, linkedin_meta: dict, client: NvidiaClient) -> str:
+def _category(facts: dict, linkedin_hit: dict | None, client: NvidiaClient) -> str:
     role = facts.get("role", "")
     industry = facts.get("industry", "")
-    headline = linkedin_meta.get("og_title", "") or linkedin_meta.get("title", "")
+    headline = ""
+    if linkedin_hit:
+        # The LinkedIn search snippet typically reads
+        # "Name - Role - Company | LinkedIn" which is exactly the headline.
+        headline = (
+            linkedin_hit.get("title", "")
+            or linkedin_hit.get("description", "")
+            or ""
+        )
 
     prompt = f"""Generate a 1 to 2 word professional category for the person below.
 
@@ -49,6 +62,18 @@ Return only the category phrase, nothing else."""
     if not words or len(words) > 2:
         return "public figure"
     return text
+
+
+def _find_hit(hits: list[dict], url: str) -> dict | None:
+    """Locate the search hit that matches a chosen URL."""
+    if not url or url == "Not found":
+        return None
+    target = url.lower().rstrip("/")
+    for hit in hits:
+        candidate = (hit.get("url") or "").lower().rstrip("/")
+        if candidate == target:
+            return hit
+    return None
 
 
 def enrich_url(
@@ -118,26 +143,21 @@ def enrich_url(
         if ig_hits:
             record["instagram"] = pick_best(ig_hits, facts, "instagram", client)
 
-        # Stage 6 — verify chosen profiles
-        linkedin_meta: dict = {}
-        if record["linkedin"] != "Not found":
-            log(f"verifying LinkedIn: {record['linkedin']}")
-            linkedin_meta = fetch_meta(record["linkedin"])
-            if not is_match(linkedin_meta, facts, url=record["linkedin"]):
-                log("  meta mismatch — demoting to Not found")
-                record["linkedin"] = "Not found"
-                linkedin_meta = {}
+        # Stage 6 — verify against the search snippets we already have
+        chosen_li = _find_hit(li_hits, record["linkedin"])
+        if chosen_li and not snippet_matches(chosen_li, facts):
+            log(f"  LinkedIn snippet doesn't match — demoting to Not found")
+            record["linkedin"] = "Not found"
+            chosen_li = None
 
-        if record["instagram"] != "Not found":
-            log(f"verifying Instagram: {record['instagram']}")
-            ig_meta = fetch_meta(record["instagram"])
-            if not is_match(ig_meta, facts, url=record["instagram"]):
-                log("  meta mismatch — demoting to Not found")
-                record["instagram"] = "Not found"
+        chosen_ig = _find_hit(ig_hits, record["instagram"])
+        if chosen_ig and not snippet_matches(chosen_ig, facts):
+            log(f"  Instagram snippet doesn't match — demoting to Not found")
+            record["instagram"] = "Not found"
 
         # Stage 7 — category
         log("generating category…")
-        record["category"] = _category(facts, linkedin_meta, client)
+        record["category"] = _category(facts, chosen_li, client)
 
     except Exception as exc:
         record["status"] = "error"
