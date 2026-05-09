@@ -64,15 +64,38 @@ CSV_FIELDS = [
 
 SESSION_MARKER = ".opencode_session_active"
 
-DEFAULT_PROMPT_TEMPLATE = (
-    "Process this article URL with the profile-finder skill. "
-    "Extract the main person, find their LinkedIn and Instagram profiles, "
-    "and return ONLY a JSON object in this exact shape, with no commentary "
-    "and no markdown fences:\n"
-    '{{"name":"","company":"","linkedin":"","instagram":"","category":""}}\n'
-    "Use \"Not found\" for any field that cannot be reliably determined.\n"
-    "URL: {url}"
-)
+DEFAULT_PROMPT_TEMPLATE = """Use the profile-finder workflow on the article URL below. Follow every step. Do not skip the search step.
+
+Step 1 — Identify the main person
+Use webfetch to read the article body. The main person is the article's subject — usually the founder, CEO, or interviewee profiled in the headline. Ignore quoted experts, journalists, and supporting names. If multiple people are co-featured equally, pick the one named first in the headline.
+Extract: full name (exact spelling), company or organization, job title or role, location if mentioned.
+
+Step 2 — Search for LinkedIn (REQUIRED, do not skip)
+Use web search. Try these queries until you find a confident match:
+  - "[Full Name] [Company] linkedin"
+  - "[Full Name] [Role] linkedin"
+  - "[Full Name] [Location] linkedin"
+Examine the top results. A confident match means the linkedin.com/in/<handle> snippet mentions the person's company, role, or location.
+If no result clears the bar, return "Not found". Never invent a URL.
+
+Step 3 — Search for Instagram (REQUIRED, do not skip)
+Use web search:
+  - "[Full Name] [Company] instagram"
+  - "[Full Name] instagram"
+Accept only instagram.com/<handle> profile URLs whose bio or content confirms the person.
+If no result clears the bar, return "Not found".
+
+Step 4 — Generate category
+A 1 to 2 word lowercase phrase describing the person's primary professional role (entrepreneur, fitness coach, real estate agent, etc.). If unclear, return: public figure.
+
+Step 5 — Output
+Return ONLY the JSON object below. No commentary. No markdown fences. No "Here is" or "I found". Just the JSON, on a single line, as your entire final message.
+
+{{"name":"","company":"","linkedin":"","instagram":"","category":""}}
+
+Use "Not found" (capital N) for any field that cannot be reliably determined.
+
+Article URL: {url}"""
 
 
 def parse_args() -> argparse.Namespace:
