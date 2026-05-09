@@ -126,13 +126,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rotate-after",
         type=int,
-        default=5,
+        default=10,
         help=(
             "Start a fresh opencode session every N URLs. 0 to disable, "
-            "1 = fresh session every URL. Defaults to 5 because the skill's "
-            "search instructions tend to drift past ~5 turns in a single "
-            "session, with the model shortcutting to 'Not found' instead of "
-            "actually searching."
+            "1 = fresh session every URL. With drift detection enabled "
+            "(--fast-threshold), rotation usually happens earlier when "
+            "the model starts skipping search steps."
+        ),
+    )
+    parser.add_argument(
+        "--fast-threshold",
+        type=float,
+        default=15.0,
+        help=(
+            "If a URL completes in fewer than this many seconds while "
+            "in a continued session, force a fresh session before the "
+            "next URL. A real LinkedIn+Instagram search takes 30-90s, "
+            "so anything under 15s is almost certainly the model "
+            "shortcutting to 'Not found' without searching. Set to 0 "
+            "to disable."
         ),
     )
     parser.add_argument("--delay", type=float, default=1.0)
@@ -474,6 +486,25 @@ def main() -> int:
                     session_marker.write_text("active", encoding="utf-8")
                     have_session = True
                 urls_in_session += 1
+
+        # Drift detection: a real search takes ~30-90s. Anything under the
+        # fast-threshold while in a continued session means the model
+        # shortcutted to "Not found" without doing the work — force a
+        # rotation so the next URL starts fresh.
+        if (
+            args.fast_threshold > 0
+            and have_session
+            and urls_in_session > 0
+            and elapsed < args.fast_threshold
+        ):
+            print(
+                f"  drift detected ({elapsed:.1f}s < {args.fast_threshold}s) — "
+                f"rotating session before next URL",
+                flush=True,
+            )
+            have_session = False
+            urls_in_session = 0
+            session_marker.unlink(missing_ok=True)
 
         if index < len(remaining):
             if args.batch_size > 0 and index % args.batch_size == 0:
