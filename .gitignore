@@ -8,6 +8,9 @@
 # Per-user data
 results.csv
 results_agent.csv
+results_opencode.csv
+opencode_debug.jsonl
+opencode.log
 urls.txt
 
 # Python bytecode

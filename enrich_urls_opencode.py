@@ -162,7 +162,43 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Process only the first N remaining URLs (0 = all).",
     )
+    parser.add_argument(
+        "--debug-log",
+        default="opencode_debug.jsonl",
+        help=(
+            "Path to a JSONL debug file. One JSON entry per URL with "
+            "full opencode output, parsed result, timing, and status. "
+            "Set to '' to disable."
+        ),
+    )
     return parser.parse_args()
+
+
+def _now() -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _stamp(msg: str) -> str:
+    return f"[{_now()}] {msg}"
+
+
+def _append_debug(path_str: str, entry: dict) -> None:
+    """Append a JSON entry to the debug log. No-op when path is empty."""
+    if not path_str:
+        return
+    try:
+        with open(path_str, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+    except OSError as exc:
+        print(_stamp(f"  WARN: could not write debug log: {exc}"), file=sys.stderr)
+
+
+def _truncate(text: str, head: int = 800, tail: int = 800) -> str:
+    if not text:
+        return ""
+    if len(text) <= head + tail:
+        return text
+    return f"{text[:head]}\n…[truncated {len(text) - head - tail} chars]…\n{text[-tail:]}"
 
 
 def load_urls_file(path: Path) -> list[str]:
@@ -401,7 +437,7 @@ def main() -> int:
     urls_in_session = 0
 
     for index, url in enumerate(remaining, start=1):
-        print(f"[{index}/{len(remaining)}] {url}", flush=True)
+        print(_stamp(f"[{index}/{len(remaining)}] {url}"), flush=True)
 
         if (
             args.rotate_after > 0
@@ -409,12 +445,15 @@ def main() -> int:
             and urls_in_session >= args.rotate_after
         ):
             print(
-                f"  rotating to a fresh opencode session after {urls_in_session} URLs"
+                _stamp(
+                    f"  rotating to a fresh opencode session after {urls_in_session} URLs"
+                )
             )
             have_session = False
             urls_in_session = 0
             session_marker.unlink(missing_ok=True)
 
+        session_continued_at_start = have_session
         success, stdout, error_msg, elapsed = run_opencode(
             url,
             template=args.prompt_template,
@@ -423,6 +462,16 @@ def main() -> int:
             continue_session=have_session,
             timeout=args.timeout,
         )
+
+        debug_entry: dict = {
+            "timestamp": _now(),
+            "url": url,
+            "elapsed_seconds": round(elapsed, 1),
+            "session_continued": session_continued_at_start,
+            "model": args.model,
+            "stdout_chars": len(stdout or ""),
+            "stdout": _truncate(stdout or ""),
+        }
 
         if not success:
             row = {
@@ -437,7 +486,22 @@ def main() -> int:
                 "elapsed_seconds": f"{elapsed:.1f}",
             }
             append_row(output_path, row)
-            print(f"  ERROR ({elapsed:.1f}s): {error_msg}", file=sys.stderr, flush=True)
+            debug_entry.update(
+                {
+                    "status": "error",
+                    "error": error_msg,
+                    "name": "Not found",
+                    "company": "Not found",
+                    "linkedin": "Not found",
+                    "instagram": "Not found",
+                    "category": "public figure",
+                }
+            )
+            print(
+                _stamp(f"  ERROR ({elapsed:.1f}s): {error_msg}"),
+                file=sys.stderr,
+                flush=True,
+            )
         else:
             try:
                 parsed = parse_skill_output(stdout)
@@ -455,14 +519,36 @@ def main() -> int:
                     "elapsed_seconds": f"{elapsed:.1f}",
                 }
                 append_row(output_path, row)
+                debug_entry.update(
+                    {
+                        "status": "parse_error",
+                        "error": str(exc),
+                        "name": "Not found",
+                        "company": "Not found",
+                        "linkedin": "Not found",
+                        "instagram": "Not found",
+                        "category": "public figure",
+                    }
+                )
                 print(
-                    f"  PARSE ERROR ({elapsed:.1f}s): {exc}",
+                    _stamp(f"  PARSE ERROR ({elapsed:.1f}s): {exc}"),
                     file=sys.stderr,
                     flush=True,
                 )
             else:
                 record["elapsed_seconds"] = f"{elapsed:.1f}"
                 append_row(output_path, record)
+                debug_entry.update(
+                    {
+                        "status": "ok",
+                        "error": "",
+                        "name": record["name"],
+                        "company": record["company"],
+                        "linkedin": record["linkedin"],
+                        "instagram": record["instagram"],
+                        "category": record["category"],
+                    }
+                )
                 if use_notion:
                     try:
                         notion_writer.upsert(
@@ -471,21 +557,27 @@ def main() -> int:
                             record,
                             notion_props,
                         )
+                        debug_entry["notion"] = "ok"
                     except Exception as exc:
+                        debug_entry["notion"] = f"error: {exc}"
                         print(
-                            f"  WARN: Notion write failed: {exc}",
+                            _stamp(f"  WARN: Notion write failed: {exc}"),
                             file=sys.stderr,
                             flush=True,
                         )
                 print(
-                    f"  ok ({elapsed:.1f}s): {record['name']} | {record['company']} | "
-                    f"li={record['linkedin'][:40]}",
+                    _stamp(
+                        f"  ok ({elapsed:.1f}s): {record['name']} | "
+                        f"{record['company']} | li={record['linkedin'][:40]}"
+                    ),
                     flush=True,
                 )
                 if not have_session:
                     session_marker.write_text("active", encoding="utf-8")
                     have_session = True
                 urls_in_session += 1
+
+        _append_debug(args.debug_log, debug_entry)
 
         # Drift detection: a real search takes ~30-90s. Anything under the
         # fast-threshold while in a continued session means the model
@@ -498,8 +590,10 @@ def main() -> int:
             and elapsed < args.fast_threshold
         ):
             print(
-                f"  drift detected ({elapsed:.1f}s < {args.fast_threshold}s) — "
-                f"rotating session before next URL",
+                _stamp(
+                    f"  drift detected ({elapsed:.1f}s < {args.fast_threshold}s) — "
+                    f"rotating session before next URL"
+                ),
                 flush=True,
             )
             have_session = False
