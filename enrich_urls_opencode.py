@@ -71,19 +71,33 @@ Use webfetch to read the article body. The main person is the article's subject 
 Extract: full name (exact spelling), company or organization, job title or role, location if mentioned.
 
 Step 2 — Search for LinkedIn (REQUIRED, do not skip)
-Use web search. Try these queries until you find a confident match:
+Use web search. Run AT LEAST these queries:
   - "[Full Name] [Company] linkedin"
+  - "[Full Name] linkedin"
   - "[Full Name] [Role] linkedin"
-  - "[Full Name] [Location] linkedin"
-Examine the top results. A confident match means the linkedin.com/in/<handle> snippet mentions the person's company, role, or location.
-If no result clears the bar, return "Not found". Never invent a URL.
+
+Accept a linkedin.com/in/<handle> URL when ANY of these is true:
+  - The URL slug contains both the first and last name (e.g., /in/jane-smith for Jane Smith) — STRONGEST signal, accept this even if the snippet is generic. LinkedIn handles are derived from real names.
+  - The URL slug contains the first or last name AND the snippet mentions the person's company, role, location, or industry.
+  - The result title or snippet explicitly names the person and matches at least one fact (company, role, or location).
+
+LinkedIn often returns generic "Sign in to view" snippets to bots. Do NOT reject a /in/firstname-lastname URL just because the snippet is empty — the slug match is enough.
+
+Only return "Not found" when no linkedin.com/in/<handle> URL with a plausible name match appeared in ANY of your searches.
+Never invent a URL.
 
 Step 3 — Search for Instagram (REQUIRED, do not skip)
-Use web search:
+Use web search. Run AT LEAST these queries:
   - "[Full Name] [Company] instagram"
   - "[Full Name] instagram"
-Accept only instagram.com/<handle> profile URLs whose bio or content confirms the person.
-If no result clears the bar, return "Not found".
+
+Accept an instagram.com/<handle> URL when ANY of these is true:
+  - The handle clearly derives from the person's name (e.g., instagram.com/janesmith or instagram.com/jane.smith for Jane Smith).
+  - The bio or post snippet mentions the person's company, role, or industry.
+
+Skip URLs that point to /p/, /reel/, /tv/, /explore/ — those are posts, not profiles. Profile URLs are instagram.com/<handle> only.
+
+If no plausible profile URL appears, return "Not found".
 
 Step 4 — Generate category
 A 1 to 2 word lowercase phrase describing the person's primary professional role (entrepreneur, fitness coach, real estate agent, etc.). If unclear, return: public figure.
