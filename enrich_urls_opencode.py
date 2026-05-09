@@ -103,8 +103,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rotate-after",
         type=int,
-        default=50,
-        help="Start a fresh opencode session every N URLs. 0 to disable.",
+        default=5,
+        help=(
+            "Start a fresh opencode session every N URLs. 0 to disable, "
+            "1 = fresh session every URL. Defaults to 5 because the skill's "
+            "search instructions tend to drift past ~5 turns in a single "
+            "session, with the model shortcutting to 'Not found' instead of "
+            "actually searching."
+        ),
     )
     parser.add_argument("--delay", type=float, default=1.0)
     parser.add_argument("--batch-size", type=int, default=10)
