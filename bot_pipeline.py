@@ -41,30 +41,35 @@ def enrich(
         if len(text) < 200:
             rec["status"] = "error"
             rec["error"] = "Article body too short or unreachable"
+            log("article too short/unreachable")
             return rec
+        log(f"fetched {len(text):,} chars")
 
-        log("extracting facts + category…")
+        log("extracting facts + category (LLM)…")
         facts = extract_facts_with_category(text, client)
         rec["category"] = facts["category"]
         if not facts.get("name"):
-            log("no main person identified")
+            log("no main person identified — skipping")
             return rec
         rec["name"] = facts["name"]
         rec["company"] = facts.get("company") or "Not found"
+        log(f"extracted: {rec['name']} · {rec['company']} · {facts['category']}")
 
         query = build_query(facts)
-        log(f"search: {query}")
+        log(f"searching: {query}")
         provider, hits = do_search(query)
         rec["provider"] = provider or ""
-        log(f"  {len(hits)} result(s)" + (f" via {provider}" if provider else " (no provider)"))
+        log(f"{len(hits)} result(s)" + (f" via {provider}" if provider else " (no provider)"))
         if not hits:
             return rec
 
-        log("matching profiles…")
+        log("matching profiles (LLM)…")
         matched = match_profiles(facts, hits, client)
         rec["linkedin"] = matched["linkedin"]
         rec["website"] = matched["website"]
+        log(f"matched → LinkedIn={rec['linkedin']} · Website={rec['website']}")
     except Exception as exc:  # noqa: BLE001
         rec["status"] = "error"
         rec["error"] = f"{type(exc).__name__}: {exc}"
+        log(f"ERROR: {rec['error']}")
     return rec

@@ -16,12 +16,19 @@ Telegram user IDs) in .env, then run:  python3 telegram_bot.py
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
 from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+# Quiet the noisy HTTP client loggers from the OpenAI SDK / urllib3.
+for _noisy in ("httpx", "httpcore", "openai", "urllib3"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+log = logging.getLogger("aienrich")
 
 import agent_config
 import config
@@ -70,7 +77,7 @@ class Bot:
             r = self._call("getUpdates", {"offset": offset, "timeout": 50})
             return r.get("result", [])
         except Exception as exc:  # network hiccup — back off briefly
-            print("getUpdates error:", exc, flush=True)
+            log.warning("getUpdates error: %s", exc)
             time.sleep(3)
             return []
 
@@ -81,7 +88,7 @@ class Bot:
         try:
             self._call("sendMessage", params)
         except Exception as exc:
-            print("send error:", exc, flush=True)
+            log.warning("send error: %s", exc)
 
     def answer_cb(self, cb_id: str, text: str = "") -> None:
         try:
@@ -114,7 +121,7 @@ class Bot:
         try:
             urlopen(req, **kwargs)
         except Exception as exc:
-            print("send_document error:", exc, flush=True)
+            log.warning("send_document error: %s", exc)
             self.send(chat, f"Couldn't send file: {exc}")
 
 
@@ -215,6 +222,11 @@ class App:
         client = self.client(cfg)
         do_search = self.do_search_fn(cfg, stats)
         path, name = results_store.new_result_file()
+        mode = ("waterfall" if cfg.get("search_mode") == "waterfall"
+                else f"single:{cfg.get('single_provider', 'exa')}")
+        model = (cfg.get("nvidia_model") or NVIDIA_MODELS[0]).split("/")[-1]
+        log.info("▶ RUN started · %d URL(s) · mode=%s · model=%s · file=%r",
+                 len(urls), mode, model, name)
         self.bot.send(chat, f"▶️ Running {len(urls)} URL(s) → “{name}”")
 
         notion = cfg.get("notion_enabled") == "1" and cfg.get("notion_token") and cfg.get("notion_db_id")
@@ -227,23 +239,34 @@ class App:
                 self.bot.send(chat, f"(Notion off — schema error: {exc})")
                 notion = False
 
+        ok_n = err_n = 0
         for i, url in enumerate(urls, 1):
-            rec = enrich(url, client, do_search)
+            log.info("[%d/%d] %s", i, len(urls), url)
+            t0 = time.time()
+            rec = enrich(url, client, do_search,
+                         log=lambda m, i=i: log.info("   ├ [%d] %s", i, m))
+            dt = time.time() - t0
             results_store.append_row(path, name, rec)
             stats.record_result(rec)
             if notion:
                 try:
                     import notion_writer_exa
                     notion_writer_exa.upsert(cfg["notion_token"], cfg["notion_db_id"], rec, nprops)
-                except Exception:
-                    pass
+                    log.info("   ├ [%d] notion upserted", i)
+                except Exception as exc:
+                    log.warning("   ├ [%d] notion write failed: %s", i, exc)
             if rec["status"] == "ok":
+                ok_n += 1
+                log.info("   └ [%d] ✅ done in %.1fs", i, dt)
                 line = (f"[{i}/{len(urls)}] ✅ {rec['name']} — {rec['company']}\n"
                         f"🔗 {rec['linkedin']}\n🌐 {rec['website']}\n🏷 {rec['category']}")
             else:
+                err_n += 1
+                log.info("   └ [%d] ❌ %s (%.1fs)", i, rec["error"], dt)
                 line = f"[{i}/{len(urls)}] ❌ {url}\n{rec['error']}"
             self.bot.send(chat, line)
 
+        log.info("✔ RUN done · %d ok · %d error(s) · file=%r", ok_n, err_n, name)
         self.bot.send(chat, f"✅ Done → “{name}” saved in results/.",
                       keyboard=[[{"text": "📥 Download this file", "callback_data": f"dlname:{name}"}]])
 
@@ -258,6 +281,7 @@ class App:
             self.bot.send(chat, "That sheet looks empty.")
             return
         col = fetch_sheet.guess_url_column(headers)
+        log.info("📄 sheet headers=%s · guessed=%r", headers, col)
         if col:
             self.fetch_and_run_sheet(chat, sheet_url, col)
         else:
@@ -274,6 +298,7 @@ class App:
         if not urls:
             self.bot.send(chat, f"No URLs found in column “{column}”.")
             return
+        log.info("📄 sheet import · column=%r · %d URL(s)", column, len(urls))
         self.bot.send(chat, f"Found {len(urls)} URL(s) in “{column}”.")
         self.run_urls(chat, urls)
 
@@ -289,6 +314,7 @@ class App:
             cfg[sp.PROVIDERS[provider]["cfg_key"]] = text
             config.save(cfg)
             self.pending.pop(chat, None)
+            log.info("⚙ key saved: %s", provider)
             self.bot.send(chat, f"✅ Saved {sp.PROVIDERS[provider]['label']} key.",
                           keyboard=keys_menu(self.cfg()))
             return
@@ -366,6 +392,7 @@ class App:
             prov = data.split(":")[2]
             cfg.pop(sp.PROVIDERS[prov]["cfg_key"], None)
             config.save(cfg)
+            log.info("⚙ key removed: %s", prov)
             self.bot.send(chat, f"Removed {sp.PROVIDERS[prov]['label']} key.", keyboard=keys_menu(cfg)); return
 
         if data.startswith("mode:"):
@@ -374,12 +401,14 @@ class App:
             if kind == "single":
                 cfg["single_provider"] = prov
             config.save(cfg)
+            log.info("⚙ search mode → %s", "waterfall" if kind == "waterfall" else f"single:{prov}")
             self.bot.send(chat, "⚙️ Settings", keyboard=settings_menu(cfg)); return
 
         if data.startswith("model:"):
             idx = int(data.split(":")[1])
             cfg["nvidia_model"] = NVIDIA_MODELS[idx]
             config.save(cfg)
+            log.info("⚙ model → %s", NVIDIA_MODELS[idx])
             self.bot.send(chat, "⚙️ Settings", keyboard=settings_menu(cfg)); return
 
         if data.startswith("col:"):
@@ -428,7 +457,7 @@ class App:
     # -- main loop
     def run(self) -> None:
         offset = 0
-        print("Bot started. Waiting for messages…", flush=True)
+        log.info("Bot started. Waiting for messages…")
         while True:
             for upd in self.bot.get_updates(offset):
                 offset = upd["update_id"] + 1
@@ -439,17 +468,20 @@ class App:
                         or (cb or {}).get("message", {}).get("chat", {}).get("id"))
                 if chat is None:
                     continue
-                print(f"update from user_id={user} chat_id={chat}", flush=True)
                 if self.allowed and user not in self.allowed:
+                    log.info("◀ blocked user_id=%s", user)
                     self.bot.send(chat, f"🔒 Not authorized. Ask the owner to add your ID: {user}")
                     continue
                 try:
                     if cb:
+                        log.info("◀ button %r from user_id=%s", cb.get("data", ""), user)
                         self.on_callback(chat, cb.get("data", ""), cb["id"])
                     elif msg and "text" in msg:
+                        preview = msg["text"].replace("\n", " ")[:60]
+                        log.info("◀ message %r from user_id=%s", preview, user)
                         self.on_message(chat, msg["text"])
                 except Exception as exc:
-                    print("handler error:", exc, flush=True)
+                    log.error("handler error: %s", exc)
                     self.bot.send(chat, f"⚠️ Error: {exc}")
 
 
