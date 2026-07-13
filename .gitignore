@@ -9,9 +9,17 @@
 results.csv
 results_agent.csv
 results_opencode.csv
+results_exa.csv
+results_sheet.csv
 opencode_debug.jsonl
 opencode.log
 urls.txt
+results/
+
+# Bot runtime state (stats + single-instance lock)
+.aienrich_stats.json
+.bot.lock
+bot.log
 
 # Python bytecode
 __pycache__/

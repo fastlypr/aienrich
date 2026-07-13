@@ -1,10 +1,11 @@
 """Stages 3 + 4: build site-restricted Google search queries and run them
 through Apify, with a primary actor + fallback chain.
 
-Primary actor: igolaizola/google-search-scraper-ppe (id 563JCPLOqM1kMmbbP).
-  - $0.15 per 1000 results, fast.
+Primary actor: scraperlink/google-search-results-serp-scraper (id 563JCPLOqM1kMmbbP).
+  - ~$0.05 per 1000 results, real Google SERP.
   - One query per call. We loop in Python for multiple queries.
-  - Input form: {query, maxItems, countryCode, languageCode, domain}.
+  - Input form: {keyword, limit, country (UPPER-case ISO), hl, include_merged}.
+  - Output: rows carrying a `results` array of {position, url, title, description}.
 
 Fallback actor: id YNcgn7yiLc72ayYeB.
   - Used when the primary errors or returns zero hits.
@@ -64,14 +65,29 @@ def build_queries(facts: dict, platform: str, max_queries: int = 3) -> list[str]
 # Stage 4 — Apify actor invocations
 # ---------------------------------------------------------------------------
 
+_LIMIT_ENUM = ("10", "20", "30", "40", "50", "100")
+
+
+def _limit_value(max_items: int) -> str:
+    """Map a desired result count to the actor's fixed `limit` select values."""
+    for opt in _LIMIT_ENUM:
+        if max_items <= int(opt):
+            return opt
+    return "100"
+
+
 def _build_input_primary(query: str, max_items: int) -> dict:
-    """Input shape for igolaizola/google-search-scraper-ppe."""
+    """Input shape for scraperlink/google-search-results-serp-scraper (563JCPLOqM1kMmbbP).
+
+    The search field is `keyword`; `country` must be an UPPER-case ISO code and
+    `limit` is a fixed select ('10','20',…). Results come back under a per-page
+    `results` array, parsed in _parse_dataset."""
     return {
-        "query": query,
-        "maxItems": max_items,
-        "countryCode": "us",
-        "languageCode": "en",
-        "domain": "google.com",
+        "keyword": query,
+        "limit": _limit_value(max_items),
+        "country": "US",
+        "hl": "en",
+        "include_merged": True,
     }
 
 
@@ -120,9 +136,13 @@ def _parse_dataset(items: list, query: str) -> list[dict]:
     for item in items:
         if not isinstance(item, dict):
             continue
-        organic = item.get("organicResults")
-        if isinstance(organic, list) and organic:
-            for entry in organic:
+        # scraperlink actor rows carry a `results` array; apify/google-search
+        # uses `organicResults`. Handle both; else treat the row as one hit.
+        entries = item.get("results")
+        if not isinstance(entries, list) or not entries:
+            entries = item.get("organicResults")
+        if isinstance(entries, list) and entries:
+            for entry in entries:
                 if isinstance(entry, dict):
                     hit = _normalize_hit(entry, query)
                     if hit:
@@ -179,19 +199,19 @@ def _run_actor(
     return data
 
 
-# Actor fallback chain. Order matters — primary first. Verified working
-# actor goes first; the cheaper igolaizola/google-search-scraper-ppe is kept
-# as a secondary in case its issues get fixed upstream.
+# Actor fallback chain. Order matters — primary first. The scraperlink SERP
+# scraper (keyword input, real Google results) goes first; the generic actor
+# YNcgn7yiLc72ayYeB stays as a fallback if the primary errors or returns zero.
 ACTOR_CHAIN: list[dict[str, Any]] = [
+    {
+        "name": "scraperlink/google-search-results-serp-scraper",
+        "id": "563JCPLOqM1kMmbbP",
+        "build_input": _build_input_primary,
+    },
     {
         "name": "google-search-fallback (YNcgn7yiLc72ayYeB)",
         "id": "YNcgn7yiLc72ayYeB",
         "build_input": _build_input_fallback,
-    },
-    {
-        "name": "igolaizola/google-search-scraper-ppe",
-        "id": "563JCPLOqM1kMmbbP",
-        "build_input": _build_input_primary,
     },
 ]
 
