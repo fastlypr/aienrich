@@ -93,16 +93,48 @@ def _tavily(query: str, cfg: dict) -> list[dict]:
     return hits
 
 
+def _firefly(query: str, cfg: dict) -> list[dict]:
+    key = _key(cfg, "firefly_api_key", "FIREFLY_API_KEY")
+    if not key:
+        return []
+    body = json.dumps({"query": query, "limit": 10}).encode("utf-8")
+    data = _get_json(
+        "https://search-firefly.lovable.app/api/public/serp",
+        # A normal User-Agent is required — Cloudflare blocks the default
+        # urllib agent with error 1010.
+        headers={
+            "Content-Type": "application/json",
+            "X-API-Key": key,
+            "User-Agent": "aienrich/1.0",
+            "Accept": "*/*",
+        },
+        data=body,
+        method="POST",
+    )
+    hits: list[dict] = []
+    for x in (data.get("results") or []):
+        u = (x.get("url") or "").strip()
+        if u:
+            hits.append({
+                "url": u,
+                "title": (x.get("title") or "").strip(),
+                "description": (x.get("description") or "").strip(),
+                "query": query,
+            })
+    return hits
+
+
 # --- registry ---------------------------------------------------------------
 
 PROVIDERS: dict[str, dict] = {
     "exa": {"label": "Exa.ai", "fn": _exa, "cfg_key": "exa_api_key", "env": "EXA_API_KEY"},
     "apify": {"label": "Apify (Google SERP)", "fn": _apify, "cfg_key": "apify_token", "env": "APIFY_TOKEN"},
+    "firefly": {"label": "Firefly (Google SERP)", "fn": _firefly, "cfg_key": "firefly_api_key", "env": "FIREFLY_API_KEY"},
     "brave": {"label": "Brave Search", "fn": _brave, "cfg_key": "brave_api_key", "env": "BRAVE_API_KEY"},
     "tavily": {"label": "Tavily", "fn": _tavily, "cfg_key": "tavily_api_key", "env": "TAVILY_API_KEY"},
 }
 
-DEFAULT_ORDER = ["exa", "apify", "brave", "tavily"]
+DEFAULT_ORDER = ["exa", "apify", "firefly", "brave", "tavily"]
 
 
 def is_configured(name: str, cfg: dict) -> bool:
