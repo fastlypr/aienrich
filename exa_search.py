@@ -15,11 +15,14 @@ from typing import Any
 
 
 def build_query(facts: dict) -> str:
-    """Build one Exa query per person.
+    """Build one search query per person.
 
-    Format: `{name} "{company}" LinkedIn & website` — name plain, company in
-    quotes (exact phrase), platform keywords at the end. Falls back to role if
-    there is no company, and to the bare name if neither is present.
+    Format: `{name} {company} LinkedIn & website` — all terms unquoted. The
+    company is NOT quoted: exact-phrase quoting filters out the right profile
+    when the person's LinkedIn lists a rebranded/abbreviated company name
+    (e.g. article says "BrainStorm Academic Solutions" but LinkedIn says
+    "BrainStorm Tutoring"). Falls back to role if there is no company, and to
+    the bare name if neither is present.
     """
     name = (facts.get("name") or "").strip()
     if not name:
@@ -29,7 +32,7 @@ def build_query(facts: dict) -> str:
     role = (facts.get("role") or "").strip()
 
     if company:
-        anchor = f' "{company}"'
+        anchor = f" {company}"
     elif role:
         anchor = f" {role}"
     else:
