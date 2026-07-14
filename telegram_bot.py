@@ -237,41 +237,53 @@ class App:
         if sec < 60:
             return f"{sec}s"
         if sec < 3600:
-            return f"{sec // 60}m {sec % 60}s"
-        return f"{sec // 3600}h {(sec % 3600) // 60}m"
+            return f"{sec // 60}m {sec % 60:02d}s"
+        return f"{sec // 3600}h {(sec % 3600) // 60:02d}m"
 
     def _progress_text(self, name, done, total, ok, err, li, web, last, t0, finished=False):
-        """HTML progress card. Monospace bar so it renders cleanly in Telegram
-        (block-shade chars like ░ show up as ugly white boxes)."""
+        """HTML progress card. The stats block sits inside <pre> so the columns
+        line up in Telegram's monospace font."""
         esc = html.escape
         pct = int(done / total * 100) if total else 0
-        filled = round(pct / 5)  # 20-char bar
-        bar = "█" * filled + "·" * (20 - filled)
+        filled = round(pct / 100 * 18)
+        bar = "█" * filled + "░" * (18 - filled)
         elapsed = time.time() - t0
+        succ = (ok / done * 100) if done else 0.0
+        li_pct = (li / ok * 100) if ok else 0.0
+        web_pct = (web / ok * 100) if ok else 0.0
 
-        def rate(n: int) -> str:
-            return f" ({round(n / done * 100)}%)" if done else ""
+        head = ("✅ <b>Lead Scraping Complete</b>" if finished
+                else "🚀 <b>Lead Scraping Progress</b>")
 
-        lines = [
-            f"{'✅' if finished else '⏳'} <b>{esc(name)}</b>",
-            f"<code>{bar}</code>",
-            f"<b>{done}/{total}</b> · {pct}%",
+        # "Results Jul - 14" -> "Jul 14" for a tidier header
+        disp = name.replace("Results ", "").replace(" - ", " ")
+
+        body = [
+            f"{'✅' if finished else '⏳'} {disp}",
+            bar,
+            f"{done} / {total} ({pct}%)",
             "",
-            f"ok <b>{ok}</b>   ·   errors <b>{err}</b>",
-            f"LinkedIn <b>{li}</b>{rate(li)}   ·   Website <b>{web}</b>{rate(web)}",
+            f"✅ Success       {ok}",
+            f"❌ Failed        {err}",
+            f"⚡ Success Rate  {succ:.1f}%",
+            "",
+            f"🔗 LinkedIn   {li} / {ok} ({li_pct:.0f}%)",
+            f"🌐 Website    {web} / {ok} ({web_pct:.0f}%)",
+            "",
+            f"⏱ Elapsed     {self._fmt_dur(elapsed)}",
         ]
-        if finished:
-            lines.append(f"took {self._fmt_dur(elapsed)}")
-        else:
-            eta = f" · ETA {self._fmt_dur((elapsed / done) * (total - done))}" if done else ""
-            lines.append(f"{self._fmt_dur(elapsed)} elapsed{eta}")
-            if last and last.get("name") not in ("", "Not found", None):
-                who = esc(last["name"])
-                co = last.get("company") or ""
-                if co and co != "Not found":
-                    who += f" — {esc(co)}"
-                lines.append(f"\n<i>{who}</i>")
-        return "\n".join(lines)
+        if not finished and done:
+            body.append(f"⌛ ETA         {self._fmt_dur((elapsed / done) * (total - done))}")
+
+        text = f"{head}\n\n<pre>{esc(chr(10).join(body))}</pre>"
+
+        if not finished and last and last.get("name") not in ("", "Not found", None):
+            text += "\n━━━━━━━━━━━━━━━━━━\n<b>Current Lead</b>"
+            text += f"\n👤 {esc(last['name'])}"
+            co = last.get("company") or ""
+            if co and co != "Not found":
+                text += f"\n🏢 {esc(co)}"
+        return text
 
     # -- run a batch of URLs
     def run_urls(self, chat: int, urls: list[str]) -> None:
