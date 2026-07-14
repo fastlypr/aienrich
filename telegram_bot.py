@@ -81,14 +81,30 @@ class Bot:
             time.sleep(3)
             return []
 
-    def send(self, chat: int, text: str, keyboard: list | None = None) -> None:
+    def send(self, chat: int, text: str, keyboard: list | None = None) -> int | None:
+        """Send a message. Returns its message_id so it can be edited later."""
         params = {"chat_id": chat, "text": text, "disable_web_page_preview": True}
         if keyboard is not None:
             params["reply_markup"] = {"inline_keyboard": keyboard}
         try:
-            self._call("sendMessage", params)
+            r = self._call("sendMessage", params)
+            return (r.get("result") or {}).get("message_id")
         except Exception as exc:
             log.warning("send error: %s", exc)
+            return None
+
+    def edit(self, chat: int, message_id: int, text: str, keyboard: list | None = None) -> None:
+        """Edit an existing message in place (used for the live progress card)."""
+        params = {"chat_id": chat, "message_id": message_id, "text": text,
+                  "disable_web_page_preview": True}
+        if keyboard is not None:
+            params["reply_markup"] = {"inline_keyboard": keyboard}
+        try:
+            self._call("editMessageText", params)
+        except Exception as exc:
+            # "message is not modified" is harmless — same text re-sent.
+            if "not modified" not in str(exc).lower():
+                log.warning("edit error: %s", exc)
 
     def answer_cb(self, cb_id: str, text: str = "") -> None:
         try:
@@ -207,6 +223,39 @@ class App:
         prov = cfg.get("single_provider", "exa")
         return lambda q: (prov, sp.search(prov, q, cfg, stats))
 
+    # -- progress card
+    @staticmethod
+    def _fmt_dur(sec: float) -> str:
+        sec = int(sec)
+        if sec < 60:
+            return f"{sec}s"
+        if sec < 3600:
+            return f"{sec // 60}m {sec % 60}s"
+        return f"{sec // 3600}h {(sec % 3600) // 60}m"
+
+    def _progress_text(self, name, done, total, ok, err, li, web, last, t0, finished=False):
+        pct = int(done / total * 100) if total else 0
+        filled = int(pct / 10)
+        bar = "▓" * filled + "░" * (10 - filled)
+        elapsed = time.time() - t0
+        head = f"✅ Finished — “{name}”" if finished else f"▶️ Running — “{name}”"
+        lines = [
+            head,
+            f"{bar} {done}/{total} ({pct}%)",
+            "",
+            f"✅ ok {ok}    ❌ errors {err}",
+            f"🔗 LinkedIn {li}    🌐 Website {web}",
+        ]
+        if finished:
+            lines.append(f"⏱ took {self._fmt_dur(elapsed)}")
+        else:
+            if done:
+                eta = (elapsed / done) * (total - done)
+                lines.append(f"⏱ {self._fmt_dur(elapsed)} elapsed · ETA {self._fmt_dur(eta)}")
+            if last and last.get("name") not in ("", "Not found", None):
+                lines.append(f"\nLast: {last['name']} — {last.get('company', '')}")
+        return "\n".join(lines)
+
     # -- run a batch of URLs
     def run_urls(self, chat: int, urls: list[str]) -> None:
         cfg = self.cfg()
@@ -227,7 +276,6 @@ class App:
         model = (cfg.get("nvidia_model") or NVIDIA_MODELS[0]).split("/")[-1]
         log.info("▶ RUN started · %d URL(s) · mode=%s · model=%s · file=%r",
                  len(urls), mode, model, name)
-        self.bot.send(chat, f"▶️ Running {len(urls)} URL(s) → “{name}”")
 
         notion = cfg.get("notion_enabled") == "1" and cfg.get("notion_token") and cfg.get("notion_db_id")
         nprops = None
@@ -239,36 +287,66 @@ class App:
                 self.bot.send(chat, f"(Notion off — schema error: {exc})")
                 notion = False
 
-        ok_n = err_n = 0
+        total = len(urls)
+        ok_n = err_n = li_n = web_n = 0
+        t_start = time.time()
+        recs: list[dict] = []
+        # One live-updating progress card instead of a message per URL.
+        msg_id = self.bot.send(
+            chat, self._progress_text(name, 0, total, 0, 0, 0, 0, None, t_start))
+        last_edit = 0.0
+
         for i, url in enumerate(urls, 1):
-            log.info("[%d/%d] %s", i, len(urls), url)
+            log.info("[%d/%d] %s", i, total, url)
             t0 = time.time()
             rec = enrich(url, client, do_search,
                          log=lambda m, i=i: log.info("   ├ [%d] %s", i, m))
             dt = time.time() - t0
             results_store.append_row(path, name, rec)
             stats.record_result(rec)
+            recs.append(rec)
+
+            if rec["status"] == "ok":
+                ok_n += 1
+                log.info("   └ [%d] ✅ done in %.1fs", i, dt)
+            else:
+                err_n += 1
+                log.info("   └ [%d] ❌ %s (%.1fs)", i, rec["error"], dt)
+            if rec["linkedin"] not in ("", "Not found"):
+                li_n += 1
+            if rec["website"] not in ("", "Not found"):
+                web_n += 1
+
             if notion:
                 try:
                     import notion_writer_exa
                     notion_writer_exa.upsert(cfg["notion_token"], cfg["notion_db_id"], rec, nprops)
-                    log.info("   ├ [%d] notion upserted", i)
                 except Exception as exc:
                     log.warning("   ├ [%d] notion write failed: %s", i, exc)
-            if rec["status"] == "ok":
-                ok_n += 1
-                log.info("   └ [%d] ✅ done in %.1fs", i, dt)
-                line = (f"[{i}/{len(urls)}] ✅ {rec['name']} — {rec['company']}\n"
-                        f"🔗 {rec['linkedin']}\n🌐 {rec['website']}\n🏷 {rec['category']}")
-            else:
-                err_n += 1
-                log.info("   └ [%d] ❌ %s (%.1fs)", i, rec["error"], dt)
-                line = f"[{i}/{len(urls)}] ❌ {url}\n{rec['error']}"
-            self.bot.send(chat, line)
+
+            # Throttle edits so Telegram doesn't rate-limit us.
+            now = time.time()
+            if msg_id and (now - last_edit >= 2.0 or i == total):
+                self.bot.edit(chat, msg_id, self._progress_text(
+                    name, i, total, ok_n, err_n, li_n, web_n, rec, t_start))
+                last_edit = now
 
         log.info("✔ RUN done · %d ok · %d error(s) · file=%r", ok_n, err_n, name)
-        self.bot.send(chat, f"✅ Done → “{name}” saved in results/.",
-                      keyboard=[[{"text": "📥 Download this file", "callback_data": f"dlname:{name}"}]])
+        final = self._progress_text(
+            name, total, total, ok_n, err_n, li_n, web_n, None, t_start, finished=True)
+        # For small runs, show the actual results inline — no need to open the CSV.
+        if total <= 5:
+            for r in recs:
+                if r["status"] == "ok":
+                    final += (f"\n\n{r['name']} — {r['company']}"
+                              f"\n🔗 {r['linkedin']}\n🌐 {r['website']}\n🏷 {r['category']}")
+                else:
+                    final += f"\n\n❌ {r['url']}\n{r['error']}"
+        kb = [[{"text": "📥 Download CSV", "callback_data": f"dlname:{name}"}]]
+        if msg_id:
+            self.bot.edit(chat, msg_id, final, keyboard=kb)
+        else:
+            self.bot.send(chat, final, keyboard=kb)
 
     # -- google sheet
     def handle_sheet(self, chat: int, sheet_url: str) -> None:
