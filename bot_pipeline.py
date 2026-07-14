@@ -64,7 +64,7 @@ def enrich(
             return rec
 
         log("matching profiles (LLM)…")
-        matched = match_profiles(facts, hits, client)
+        matched = match_profiles(facts, hits, client, article_url=url)
         rec["linkedin"] = matched["linkedin"]
         rec["website"] = matched["website"]
         log(f"matched → LinkedIn={rec['linkedin']} · Website={rec['website']}")

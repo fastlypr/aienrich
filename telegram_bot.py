@@ -15,6 +15,7 @@ Telegram user IDs) in .env, then run:  python3 telegram_bot.py
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import os
@@ -81,9 +82,12 @@ class Bot:
             time.sleep(3)
             return []
 
-    def send(self, chat: int, text: str, keyboard: list | None = None) -> int | None:
+    def send(self, chat: int, text: str, keyboard: list | None = None,
+             parse_mode: str | None = None) -> int | None:
         """Send a message. Returns its message_id so it can be edited later."""
         params = {"chat_id": chat, "text": text, "disable_web_page_preview": True}
+        if parse_mode:
+            params["parse_mode"] = parse_mode
         if keyboard is not None:
             params["reply_markup"] = {"inline_keyboard": keyboard}
         try:
@@ -93,10 +97,13 @@ class Bot:
             log.warning("send error: %s", exc)
             return None
 
-    def edit(self, chat: int, message_id: int, text: str, keyboard: list | None = None) -> None:
+    def edit(self, chat: int, message_id: int, text: str, keyboard: list | None = None,
+             parse_mode: str | None = None) -> None:
         """Edit an existing message in place (used for the live progress card)."""
         params = {"chat_id": chat, "message_id": message_id, "text": text,
                   "disable_web_page_preview": True}
+        if parse_mode:
+            params["parse_mode"] = parse_mode
         if keyboard is not None:
             params["reply_markup"] = {"inline_keyboard": keyboard}
         try:
@@ -234,26 +241,36 @@ class App:
         return f"{sec // 3600}h {(sec % 3600) // 60}m"
 
     def _progress_text(self, name, done, total, ok, err, li, web, last, t0, finished=False):
+        """HTML progress card. Monospace bar so it renders cleanly in Telegram
+        (block-shade chars like ░ show up as ugly white boxes)."""
+        esc = html.escape
         pct = int(done / total * 100) if total else 0
-        filled = int(pct / 10)
-        bar = "▓" * filled + "░" * (10 - filled)
+        filled = round(pct / 5)  # 20-char bar
+        bar = "█" * filled + "·" * (20 - filled)
         elapsed = time.time() - t0
-        head = f"✅ Finished — “{name}”" if finished else f"▶️ Running — “{name}”"
+
+        def rate(n: int) -> str:
+            return f" ({round(n / done * 100)}%)" if done else ""
+
         lines = [
-            head,
-            f"{bar} {done}/{total} ({pct}%)",
+            f"{'✅' if finished else '⏳'} <b>{esc(name)}</b>",
+            f"<code>{bar}</code>",
+            f"<b>{done}/{total}</b> · {pct}%",
             "",
-            f"✅ ok {ok}    ❌ errors {err}",
-            f"🔗 LinkedIn {li}    🌐 Website {web}",
+            f"ok <b>{ok}</b>   ·   errors <b>{err}</b>",
+            f"LinkedIn <b>{li}</b>{rate(li)}   ·   Website <b>{web}</b>{rate(web)}",
         ]
         if finished:
-            lines.append(f"⏱ took {self._fmt_dur(elapsed)}")
+            lines.append(f"took {self._fmt_dur(elapsed)}")
         else:
-            if done:
-                eta = (elapsed / done) * (total - done)
-                lines.append(f"⏱ {self._fmt_dur(elapsed)} elapsed · ETA {self._fmt_dur(eta)}")
+            eta = f" · ETA {self._fmt_dur((elapsed / done) * (total - done))}" if done else ""
+            lines.append(f"{self._fmt_dur(elapsed)} elapsed{eta}")
             if last and last.get("name") not in ("", "Not found", None):
-                lines.append(f"\nLast: {last['name']} — {last.get('company', '')}")
+                who = esc(last["name"])
+                co = last.get("company") or ""
+                if co and co != "Not found":
+                    who += f" — {esc(co)}"
+                lines.append(f"\n<i>{who}</i>")
         return "\n".join(lines)
 
     # -- run a batch of URLs
@@ -293,7 +310,8 @@ class App:
         recs: list[dict] = []
         # One live-updating progress card instead of a message per URL.
         msg_id = self.bot.send(
-            chat, self._progress_text(name, 0, total, 0, 0, 0, 0, None, t_start))
+            chat, self._progress_text(name, 0, total, 0, 0, 0, 0, None, t_start),
+            parse_mode="HTML")
         last_edit = 0.0
 
         for i, url in enumerate(urls, 1):
@@ -328,7 +346,8 @@ class App:
             now = time.time()
             if msg_id and (now - last_edit >= 2.0 or i == total):
                 self.bot.edit(chat, msg_id, self._progress_text(
-                    name, i, total, ok_n, err_n, li_n, web_n, rec, t_start))
+                    name, i, total, ok_n, err_n, li_n, web_n, rec, t_start),
+                    parse_mode="HTML")
                 last_edit = now
 
         log.info("✔ RUN done · %d ok · %d error(s) · file=%r", ok_n, err_n, name)
@@ -336,17 +355,20 @@ class App:
             name, total, total, ok_n, err_n, li_n, web_n, None, t_start, finished=True)
         # For small runs, show the actual results inline — no need to open the CSV.
         if total <= 5:
+            esc = html.escape
             for r in recs:
                 if r["status"] == "ok":
-                    final += (f"\n\n{r['name']} — {r['company']}"
-                              f"\n🔗 {r['linkedin']}\n🌐 {r['website']}\n🏷 {r['category']}")
+                    final += (f"\n\n<b>{esc(r['name'])}</b> — {esc(r['company'])}"
+                              f"\n{esc(r['linkedin'])}"
+                              f"\n{esc(r['website'])}"
+                              f"\n<i>{esc(r['category'])}</i>")
                 else:
-                    final += f"\n\n❌ {r['url']}\n{r['error']}"
+                    final += f"\n\n❌ {esc(r['url'])}\n<i>{esc(r['error'])}</i>"
         kb = [[{"text": "📥 Download CSV", "callback_data": f"dlname:{name}"}]]
         if msg_id:
-            self.bot.edit(chat, msg_id, final, keyboard=kb)
+            self.bot.edit(chat, msg_id, final, keyboard=kb, parse_mode="HTML")
         else:
-            self.bot.send(chat, final, keyboard=kb)
+            self.bot.send(chat, final, keyboard=kb, parse_mode="HTML")
 
     # -- google sheet
     def handle_sheet(self, chat: int, sheet_url: str) -> None:

@@ -127,6 +127,18 @@ _SOCIAL_HOSTS = (
     "threads.net",
 )
 
+# News, press-release, directory and data-broker hosts. A "website" must be the
+# person's own or their company's site — never coverage *about* them.
+_NON_WEBSITE_HOSTS = (
+    "usatoday.com", "ibtimes.com", "forbes.com", "bloomberg.com", "yahoo.com",
+    "reuters.com", "cnbc.com", "businessinsider.com", "medium.com",
+    "substack.com", "prnewswire.com", "businesswire.com", "einpresswire.com",
+    "globenewswire.com", "wikipedia.org", "crunchbase.com", "zoominfo.com",
+    "rocketreach.co", "signalhire.com", "apollo.io", "glassdoor.com",
+    "indeed.com", "bizapedia.com", "dnb.com", "trustpilot.com", "yelp.com",
+    "amazon.com", "google.com", "bing.com", "eventbrite.com", "meetup.com",
+)
+
 
 def _match_prompt(facts: dict, results: list[dict]) -> str:
     facts_lines = []
@@ -147,7 +159,7 @@ def _match_prompt(facts: dict, results: list[dict]) -> str:
     )
 
     return f"""You are matching a person from a news article to their LinkedIn \
-profile and their personal/company website, using search results.
+profile and their website, using search results.
 
 Person facts:
 {chr(10).join(facts_lines)}{hints}
@@ -155,30 +167,53 @@ Person facts:
 Search results:
 {candidates}
 
-Choose:
-- The result that is THIS person's LinkedIn profile (a linkedin.com/in/... page).
-- The result that is THIS person's personal or company website (NOT a social \
-network, news site, directory, or aggregator).
+Pick TWO results (they are judged by DIFFERENT rules):
 
-Be strict. Only choose a candidate when the name AND at least one of \
-company/role/location confidently agree. People often share a name — if you \
-are not confident a result is the SAME person, do not choose it.
+1. "linkedin" — THIS person's LinkedIn profile page (linkedin.com/in/...).
+   Be strict: people share names. Choose only if the title/snippet shows it is \
+the SAME person (name matches AND company, role, or location agrees).
+   Note: the URL slug may be an abbreviation or nickname (e.g. /in/sedoty for \
+Scott Doty) — judge by the title and snippet, NOT by the slug.
+   Company names may be rebranded, shortened, or a sister brand (e.g. article \
+says "BrainStorm Academic Solutions", profile says "BrainStorm Tutoring") — \
+treat those as the same if clearly the same person.
+   Do NOT pick /company/ pages, /posts/, or /pub/dir/ directory listings.
+
+2. "website" — the official site of this person or their company.
+   Looser rule: the person's NAME does NOT need to appear in the snippet. If the \
+result is clearly their company's official site (company name matches the domain \
+or title) or their personal site, pick it.
+   Prefer a personal site (e.g. thescottdoty.com) or the company homepage.
+   Do NOT pick news articles, press releases, Wikipedia, directories, data \
+brokers (ZoomInfo, Crunchbase, RocketReach), or social networks.
 
 Return strict JSON: {{"linkedin": <result number or 0>, "website": <result number or 0>}}
-Use 0 when no result confidently matches. Return only JSON. No commentary."""
+Use 0 for either field only when no result plausibly matches. Return only JSON. \
+No commentary."""
 
 
 def _is_linkedin_profile(url: str) -> bool:
     return bool(re.match(r"^https?://([a-z]{2,3}\.)?linkedin\.com/in/[^/?#]+", url, re.I))
 
 
-def _is_website(url: str) -> bool:
+def _host(url: str) -> str:
+    m = re.match(r"^https?://([^/?#]+)", url.lower())
+    return (m.group(1) if m else "").removeprefix("www.")
+
+
+def _is_website(url: str, article_url: str = "") -> bool:
+    """True if the URL could be the person's own / their company's site."""
     low = url.lower()
-    return not any(host in low for host in _SOCIAL_HOSTS)
+    if any(h in low for h in _SOCIAL_HOSTS) or any(h in low for h in _NON_WEBSITE_HOSTS):
+        return False
+    # Never return the source article's own domain as "the website".
+    if article_url and _host(url) == _host(article_url):
+        return False
+    return True
 
 
 def match_profiles(
-    facts: dict, results: list[dict], client: NvidiaClient
+    facts: dict, results: list[dict], client: NvidiaClient, article_url: str = ""
 ) -> dict:
     """Return {"linkedin": url|"Not found", "website": url|"Not found"}."""
     out = {"linkedin": "Not found", "website": "Not found"}
@@ -202,7 +237,7 @@ def match_profiles(
         return "Not found"
 
     out["linkedin"] = _pick("linkedin", _is_linkedin_profile)
-    out["website"] = _pick("website", _is_website)
+    out["website"] = _pick("website", lambda u: _is_website(u, article_url))
     return out
 
 
@@ -266,7 +301,7 @@ def enrich_url_exa(
 
         # Stage 5 — match the right LinkedIn + website (LLM call #2)
         log("matching profiles…")
-        matched = match_profiles(facts, results, client)
+        matched = match_profiles(facts, results, client, article_url=url)
         record["linkedin"] = matched["linkedin"]
         record["website"] = matched["website"]
         log(f"  linkedin: {record['linkedin']} | website: {record['website']}")
