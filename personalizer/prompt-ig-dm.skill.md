@@ -14,12 +14,18 @@ built or are known for.
 ## INPUTS
 
 The lead message provides:
-- **full_name** — the lead's full name (disambiguates if the article features more than one person).
+- **full_name** — the lead's full name. **May be empty for Instagram leads.**
+- **username** — the lead's Instagram handle (e.g. `@johndoe` or `johndoe`).
+  Use it only as a hint to identify the right person in the article. Do NOT
+  use the handle as the first name.
 - **article_url** — the media article URL.
 - **article_content** — the already-fetched, cleaned article text. **This is your source of truth.**
 - **linkedin**, **email** — passed through unchanged.
 
 You extract `first_name`, `topic`, and `role`.
+
+If `full_name` is empty, find the person's real name **in the article_content**
+(use `username` to pick the right person if several appear).
 
 ---
 
@@ -67,9 +73,14 @@ that reads naturally in that sentence.
 ---
 
 ## RULES FOR `first_name`
-Derive from `full_name` — no titles, no last/middle name. Strip honorifics
-(Dr., Mr., Ms., Prof., …). Use a nickname if the article uses one consistently.
-Capitalize properly.
+A clean, callable first name for a DM. Source it in this order:
+1. `full_name` if provided.
+2. Otherwise the person's real name **from the article_content** (the person the
+   `username` refers to).
+No titles, no last/middle name. Strip honorifics (Dr., Mr., Ms., Prof., …). Use a
+nickname if the article uses one consistently. Capitalize properly.
+Never use the `username`/handle as the first name. If no real first name can be
+found in the article, set `first_name` = `""`.
 
 ## RULES FOR `role`
 A single role title, 1–3 words (e.g. founder, CEO, author, trader). Pick ONE.

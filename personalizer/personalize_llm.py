@@ -73,10 +73,11 @@ def env_int(name, default):
 
 def main():
     ap = argparse.ArgumentParser(description="NVIDIA cold-email personalizer (one lead).")
-    ap.add_argument("--full_name", required=True)
+    ap.add_argument("--full_name", default="")
     ap.add_argument("--article_url", default="")
     ap.add_argument("--linkedin", default="")
     ap.add_argument("--email", default="")
+    ap.add_argument("--username", default="")
     args = ap.parse_args()
 
     api_key = (os.environ.get("NVIDIA_API_KEY") or "").strip()
@@ -106,6 +107,7 @@ def main():
 
     user_msg = (
         f"full_name: {args.full_name}\n"
+        f"username: {args.username}\n"
         f"article_url: {args.article_url}\n"
         f"linkedin: {args.linkedin}\n"
         f"email: {args.email}\n"

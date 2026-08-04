@@ -184,10 +184,10 @@ def write_atomic(target_path, fieldnames, rows):
     os.replace(tmp, target_path)
 
 
-def process_lead(idx, full_name, article_url, linkedin, email, limiter, timeout):
+def process_lead(idx, full_name, article_url, linkedin, email, username, limiter, timeout):
     """Worker: fetch + model. Returns (idx, status, email, note, first_name, topic)."""
     if not article_url:
-        return (idx, "review", email, "no_article_url", "", "")
+        return (idx, "review", email or username, "no_article_url", "", "")
 
     try:
         fetch = subprocess.run(
@@ -204,7 +204,7 @@ def process_lead(idx, full_name, article_url, linkedin, email, limiter, timeout)
         model = subprocess.run(
             [PY, os.path.join(SCRIPT_DIR, "personalize_llm.py"),
              "--full_name", full_name, "--article_url", article_url,
-             "--linkedin", linkedin, "--email", email],
+             "--linkedin", linkedin, "--email", email, "--username", username],
             input=fetch.stdout, capture_output=True, text=True, timeout=timeout,
         )
     except subprocess.TimeoutExpired:
@@ -276,15 +276,23 @@ def main():
     name_col = (os.environ.get("NAME_COL") or "").strip() \
         or pick_col(source_fields, ["full_name", "Name", "name", "Full Name"])
     article_col = (os.environ.get("ARTICLE_COL") or "").strip() \
-        or pick_col(source_fields, ["article_url", "article", "Article", "url", "URL"])
+        or pick_col(source_fields, ["article_url", "article", "Article", "url", "URL", "Source URL"])
+    username_col = (os.environ.get("USERNAME_COL") or "").strip() \
+        or pick_col(source_fields, ["username", "Username", "handle", "instagram", "ig"])
     linkedin_col = pick_col(source_fields, ["linkedin", "LinkedIn", "linkedin_url"])
     email_col = pick_col(source_fields, ["email", "Email", "email_address", "Email Address"])
-    if name_col not in source_fields:
-        name_col = None
-    if article_col not in source_fields:
-        article_col = None
-    if not name_col or not article_col:
-        sys.stderr.write(f"could not find name/article columns in: {source_fields}\n")
+    for _c in ("name_col", "article_col", "username_col"):
+        if locals()[_c] not in source_fields:
+            if _c == "name_col":
+                name_col = None
+            elif _c == "article_col":
+                article_col = None
+            else:
+                username_col = None
+    # Need an article to fetch, plus at least a name OR a username for context.
+    if not article_col or not (name_col or username_col):
+        sys.stderr.write(
+            f"need an article column and a name/username column; got: {source_fields}\n")
         return 1
 
     # Reuse existing first_name/topic columns (any case) — never duplicate them.
@@ -334,10 +342,12 @@ def main():
             continue
         if limit and len(todo) >= limit:
             continue
-        todo.append((idx, (row.get(name_col) or "").strip(),
+        todo.append((idx,
+                     (row.get(name_col) or "").strip() if name_col else "",
                      (row.get(article_col) or "").strip(),
                      (row.get(linkedin_col) or "").strip() if linkedin_col else "",
-                     (row.get(email_col) or "").strip() if email_col else ""))
+                     (row.get(email_col) or "").strip() if email_col else "",
+                     (row.get(username_col) or "").strip() if username_col else ""))
 
     total = len(todo)
     print(f"Source: {in_arg}")

@@ -406,18 +406,24 @@ class App:
             self.bot.send(chat, "That sheet looks empty."); return
         article_col = fetch_sheet.guess_url_column(headers)
         name_col = fetch_sheet.guess_name_column(headers) or ""
-        log.info("✍ pz headers=%s · article=%r · name=%r", headers, article_col, name_col)
+        username_col = next(
+            (h for h in headers if h.strip().lower() in
+             ("username", "handle", "instagram", "ig", "insta")), "")
+        log.info("✍ pz headers=%s · article=%r · name=%r · username=%r",
+                 headers, article_col, name_col, username_col)
         if article_col:
-            self.run_personalizer(chat, source, mode, name_col, article_col)
+            self.run_personalizer(chat, source, mode, name_col, article_col, username_col)
         else:
             self.pending[chat] = {"await": "pz_col", "mode": mode, "source": source,
-                                  "headers": headers, "name_col": name_col}
+                                  "headers": headers, "name_col": name_col,
+                                  "username_col": username_col}
             rows = [[{"text": h, "callback_data": f"pzcol:{i}"}] for i, h in enumerate(headers)]
             rows.append([{"text": "⬅️ Back", "callback_data": "m:pz"}])
             self.bot.send(chat, "Which column has the ARTICLE URL to fetch?", keyboard=rows)
 
     def run_personalizer(self, chat: int, source: str, mode: str,
-                         name_col: str = "", article_col: str = "") -> None:
+                         name_col: str = "", article_col: str = "",
+                         username_col: str = "") -> None:
         cfg = self.cfg()
         here = Path(__file__).resolve().parent
         script = here / "personalizer" / ("run_ig.py" if mode == "ig" else "run_all.py")
@@ -441,6 +447,8 @@ class App:
             env["ARTICLE_COL"] = article_col
         if name_col:
             env["NAME_COL"] = name_col
+        if username_col:
+            env["USERNAME_COL"] = username_col
         env.setdefault("RPM", "38")
         env.setdefault("CONCURRENCY", "5")
 
@@ -625,7 +633,8 @@ class App:
             if pend and pend.get("await") == "pz_col":
                 article_col = pend["headers"][int(data.split(":")[1])]
                 self.run_personalizer(chat, pend["source"], pend["mode"],
-                                      pend.get("name_col", ""), article_col)
+                                      pend.get("name_col", ""), article_col,
+                                      pend.get("username_col", ""))
             return
         if data == "pzdl":
             out = getattr(self, "_pz_last", None)
