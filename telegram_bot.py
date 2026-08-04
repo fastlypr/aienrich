@@ -467,45 +467,55 @@ class App:
             self.bot.send(chat, "Send me one or more article URLs (or use the menu).",
                           keyboard=main_menu())
 
-    def on_callback(self, chat: int, data: str, cb_id: str) -> None:
+    def on_callback(self, chat: int, data: str, cb_id: str, msg_id: int | None = None) -> None:
         self.bot.answer_cb(cb_id)
         cfg = self.cfg()
 
+        # nav() edits the SAME message the button is on (no new-message spam);
+        # falls back to a fresh send if we somehow lack the message id.
+        def nav(text: str, kb: list | None = None) -> None:
+            if msg_id:
+                self.bot.edit(chat, msg_id, text, keyboard=kb)
+            else:
+                self.bot.send(chat, text, keyboard=kb)
+
         if data == "m:home":
-            self.bot.send(chat, "🏠 Menu", keyboard=main_menu()); return
+            nav("🏠 Menu", main_menu()); return
         if data == "m:run":
-            self.bot.send(chat, "Paste one or more URLs (one per line), or send /sheet <url>."); return
+            nav("Paste one or more URLs (one per line), or send /sheet <url>.",
+                [[{"text": "⬅️ Back", "callback_data": "m:home"}]]); return
         if data == "m:stats":
-            self.bot.send(chat, Stats().summary(), keyboard=main_menu()); return
+            nav(Stats().summary(), [[{"text": "⬅️ Back", "callback_data": "m:home"}]]); return
         if data == "m:set":
-            self.bot.send(chat, "⚙️ Settings", keyboard=settings_menu(cfg)); return
+            nav("⚙️ Settings", settings_menu(cfg)); return
         if data == "m:dl":
-            self.show_downloads(chat); return
+            self.show_downloads(chat, msg_id); return
 
         # settings submenus
         if data == "s:keys":
-            self.bot.send(chat, "🔑 Tap a provider to add/replace its key; 🗑 to remove.",
-                          keyboard=keys_menu(cfg)); return
+            nav("🔑 Tap a provider to add/replace its key; 🗑 to remove.", keys_menu(cfg)); return
         if data == "s:mode":
-            self.bot.send(chat, "🔎 Choose search mode:", keyboard=mode_menu()); return
+            nav("🔎 Choose search mode:", mode_menu()); return
         if data == "s:model":
-            self.bot.send(chat, "🧠 Choose NVIDIA model:", keyboard=model_menu()); return
+            nav("🧠 Choose NVIDIA model:", model_menu()); return
         if data == "s:notion":
             cfg["notion_enabled"] = "0" if cfg.get("notion_enabled") == "1" else "1"
             config.save(cfg)
-            self.bot.send(chat, "⚙️ Settings", keyboard=settings_menu(cfg)); return
+            nav("⚙️ Settings", settings_menu(cfg)); return
 
         if data.startswith("k:add:"):
             prov = data.split(":")[2]
             self.pending[chat] = {"await": "add_key", "provider": prov}
-            self.bot.send(chat, f"Send the API key for {sp.PROVIDERS[prov]['label']} (it's stored locally):")
+            nav(f"Send the API key for {sp.PROVIDERS[prov]['label']} (stored locally).\n"
+                f"It replaces the current one.",
+                [[{"text": "⬅️ Cancel", "callback_data": "s:keys"}]])
             return
         if data.startswith("k:del:"):
             prov = data.split(":")[2]
             cfg.pop(sp.PROVIDERS[prov]["cfg_key"], None)
             config.save(cfg)
             log.info("⚙ key removed: %s", prov)
-            self.bot.send(chat, f"Removed {sp.PROVIDERS[prov]['label']} key.", keyboard=keys_menu(cfg)); return
+            nav("🔑 Tap a provider to add/replace its key; 🗑 to remove.", keys_menu(cfg)); return
 
         if data.startswith("mode:"):
             _, kind, prov = data.split(":", 2)
@@ -514,14 +524,14 @@ class App:
                 cfg["single_provider"] = prov
             config.save(cfg)
             log.info("⚙ search mode → %s", "waterfall" if kind == "waterfall" else f"single:{prov}")
-            self.bot.send(chat, "⚙️ Settings", keyboard=settings_menu(cfg)); return
+            nav("⚙️ Settings", settings_menu(cfg)); return
 
         if data.startswith("model:"):
             idx = int(data.split(":")[1])
             cfg["nvidia_model"] = NVIDIA_MODELS[idx]
             config.save(cfg)
             log.info("⚙ model → %s", NVIDIA_MODELS[idx])
-            self.bot.send(chat, "⚙️ Settings", keyboard=settings_menu(cfg)); return
+            nav("⚙️ Settings", settings_menu(cfg)); return
 
         if data.startswith("col:"):
             pend = self.pending.pop(chat, None)
@@ -543,12 +553,17 @@ class App:
             files = results_store.list_files()
             if 0 <= int(idx) < len(files):
                 results_store.set_used(files[int(idx)]["name"], val == "1")
-            self.show_downloads(chat); return
+            self.show_downloads(chat, msg_id); return
 
-    def show_downloads(self, chat: int) -> None:
+    def show_downloads(self, chat: int, msg_id: int | None = None) -> None:
+        def out(text, kb):
+            if msg_id:
+                self.bot.edit(chat, msg_id, text, keyboard=kb)
+            else:
+                self.bot.send(chat, text, keyboard=kb)
         files = results_store.list_files()
         if not files:
-            self.bot.send(chat, "No result files yet — run some URLs first.", keyboard=main_menu()); return
+            out("No result files yet — run some URLs first.", main_menu()); return
         rows = []
         for i, e in enumerate(files[:20]):
             rows.append([{"text": f"📄 {e['name']} · {results_store.tag(e)} · {e.get('rows',0)} rows",
@@ -557,7 +572,7 @@ class App:
             label = "mark unused" if e.get("used") else "mark used"
             rows.append([{"text": f"   {label}", "callback_data": f"use:{i}:{toggle}"}])
         rows.append([{"text": "⬅️ Back", "callback_data": "m:home"}])
-        self.bot.send(chat, "📥 Your result files:", keyboard=rows)
+        out("📥 Your result files:", rows)
 
     def send_result(self, chat: int, name: str) -> None:
         p = results_store.path_for(name)
@@ -587,7 +602,8 @@ class App:
                 try:
                     if cb:
                         log.info("◀ button %r from user_id=%s", cb.get("data", ""), user)
-                        self.on_callback(chat, cb.get("data", ""), cb["id"])
+                        cb_msg_id = (cb.get("message") or {}).get("message_id")
+                        self.on_callback(chat, cb.get("data", ""), cb["id"], cb_msg_id)
                     elif msg and "text" in msg:
                         preview = msg["text"].replace("\n", " ")[:60]
                         log.info("◀ message %r from user_id=%s", preview, user)
