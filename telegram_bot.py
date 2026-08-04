@@ -20,7 +20,10 @@ import json
 import logging
 import os
 import re
+import subprocess
+import sys
 import time
+from datetime import date
 from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -155,9 +158,18 @@ class Bot:
 def main_menu() -> list:
     return [
         [{"text": "▶️ Run (paste URLs)", "callback_data": "m:run"}],
+        [{"text": "✍️ Personalizer", "callback_data": "m:pz"}],
         [{"text": "📥 Download results", "callback_data": "m:dl"},
          {"text": "📊 Stats", "callback_data": "m:stats"}],
         [{"text": "⚙️ Settings", "callback_data": "m:set"}],
+    ]
+
+
+def personalizer_menu() -> list:
+    return [
+        [{"text": "✉️ Cold Email topic", "callback_data": "pz:email"}],
+        [{"text": "📸 Instagram DM topic", "callback_data": "pz:ig"}],
+        [{"text": "⬅️ Back", "callback_data": "m:home"}],
     ]
 
 
@@ -382,6 +394,76 @@ class App:
         else:
             self.bot.send(chat, final, keyboard=kb, parse_mode="HTML")
 
+    # -- personalizer (vendored cold-emails scripts, run as-is)
+    def run_personalizer(self, chat: int, source: str, mode: str) -> None:
+        cfg = self.cfg()
+        here = Path(__file__).resolve().parent
+        script = here / "personalizer" / ("run_ig.py" if mode == "ig" else "run_all.py")
+        if not script.exists():
+            self.bot.send(chat, "Personalizer scripts not found (personalizer/)."); return
+
+        Path("results").mkdir(exist_ok=True)
+        label = "IG-DM" if mode == "ig" else "ColdEmail"
+        base = f"results/Personalized {label} {date.today().strftime('%b-%d')}"
+        out = f"{base}.csv"
+        i = 2
+        while Path(out).exists():
+            out = f"{base} ({i}).csv"; i += 1
+
+        env = dict(os.environ)
+        env["OUT"] = out
+        env["NVIDIA_API_KEY"] = cfg.get("nvidia_api_key") or os.getenv("NVIDIA_API_KEY", "")
+        if cfg.get("nvidia_model"):
+            env["NVIDIA_MODEL"] = cfg["nvidia_model"]
+        env.setdefault("RPM", "38")
+        env.setdefault("CONCURRENCY", "5")
+
+        kind = "Instagram DM" if mode == "ig" else "Cold Email"
+        log.info("✍ personalizer start · %s · %s → %s", kind, source[:60], out)
+        msg_id = self.bot.send(chat, f"✍️ Personalizing ({kind})…")
+        total = ok = review = failed = done = 0
+        t0 = time.time()
+        last_edit = 0.0
+
+        def card(finished=False):
+            head = "✅ Personalization Complete" if finished else "✍️ Personalizing"
+            pct = int(done / total * 100) if total else 0
+            body = [f"{kind}", f"{done} / {total or '?'} ({pct}%)", "",
+                    f"✅ ok      {ok}", f"⏭ skipped {review}", f"❌ failed  {failed}",
+                    f"⏱ {self._fmt_dur(time.time() - t0)}"]
+            return f"<b>{head}</b>\n\n<pre>{html.escape(chr(10).join(body))}</pre>"
+
+        proc = subprocess.Popen([sys.executable, str(script), source],
+                                cwd=str(here), env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, bufsize=1)
+        for line in proc.stdout:
+            line = line.rstrip()
+            log.info("   ✍ %s", line)
+            m = re.search(r"Processing (\d+) leads", line)
+            if m:
+                total = int(m.group(1))
+            m = re.match(r"\[(\d+)/(\d+)\]\s+(OK|SKIP|FAIL)", line)
+            if m:
+                done = int(m.group(1)); total = int(m.group(2))
+                tag = m.group(3)
+                ok += tag == "OK"; review += tag == "SKIP"; failed += tag == "FAIL"
+            now = time.time()
+            if msg_id and now - last_edit >= 2.0:
+                self.bot.edit(chat, msg_id, card(), parse_mode="HTML")
+                last_edit = now
+        proc.wait()
+
+        log.info("✍ personalizer done · ok=%d review=%d failed=%d", ok, review, failed)
+        kb = [[{"text": "📥 Download CSV", "callback_data": "pzdl"}]]
+        self._pz_last = out  # remember for the download button
+        if msg_id:
+            self.bot.edit(chat, msg_id, card(finished=True), keyboard=kb, parse_mode="HTML")
+        if Path(out).exists():
+            self.bot.send_document(chat, Path(out), caption=Path(out).name)
+        else:
+            self.bot.send(chat, "No output file produced — check the logs.")
+
     # -- google sheet
     def handle_sheet(self, chat: int, sheet_url: str) -> None:
         try:
@@ -420,6 +502,12 @@ class App:
 
         # pending multi-step input?
         pend = self.pending.get(chat)
+        if pend and pend.get("await") == "pz_input":
+            self.pending.pop(chat, None)
+            url = _URL_RE.search(text)
+            if not url or "docs.google.com" not in text:
+                self.bot.send(chat, "Send a public Google Sheet URL."); return
+            self.run_personalizer(chat, url.group(0), pend["mode"]); return
         if pend and pend.get("await") == "add_key":
             provider = pend["provider"]
             cfg = self.cfg()
@@ -490,6 +578,23 @@ class App:
             nav("⚙️ Settings", settings_menu(cfg)); return
         if data == "m:dl":
             self.show_downloads(chat, msg_id); return
+        if data == "m:pz":
+            nav("✍️ Personalizer — pick a mode:", personalizer_menu()); return
+        if data in ("pz:email", "pz:ig"):
+            mode = "ig" if data == "pz:ig" else "email"
+            self.pending[chat] = {"await": "pz_input", "mode": mode}
+            kind = "Instagram DM" if mode == "ig" else "Cold Email"
+            nav(f"{kind} selected.\nSend a public Google Sheet URL with your leads "
+                f"(needs name + article URL columns; email carried through).",
+                [[{"text": "⬅️ Back", "callback_data": "m:pz"}]])
+            return
+        if data == "pzdl":
+            out = getattr(self, "_pz_last", None)
+            if out and Path(out).exists():
+                self.bot.send_document(chat, Path(out), caption=Path(out).name)
+            else:
+                self.bot.send(chat, "No personalized file available.")
+            return
 
         # settings submenus
         if data == "s:keys":
