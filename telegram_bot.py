@@ -451,6 +451,7 @@ class App:
             env["USERNAME_COL"] = username_col
         env.setdefault("RPM", "38")
         env.setdefault("CONCURRENCY", "5")
+        env["PYTHONUNBUFFERED"] = "1"  # stream child prints live (not block-buffered)
 
         kind = "Instagram DM" if mode == "ig" else "Cold Email"
         log.info("✍ personalizer start · %s · %s → %s", kind, source[:60], out)
@@ -467,7 +468,7 @@ class App:
                     f"⏱ {self._fmt_dur(time.time() - t0)}"]
             return f"<b>{head}</b>\n\n<pre>{html.escape(chr(10).join(body))}</pre>"
 
-        proc = subprocess.Popen([sys.executable, str(script), source],
+        proc = subprocess.Popen([sys.executable, "-u", str(script), source],
                                 cwd=str(here), env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, bufsize=1)
