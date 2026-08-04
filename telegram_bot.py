@@ -578,9 +578,15 @@ class App:
                 self.bot.send(chat, "Send: /sheet <public Google Sheet URL>")
             return
 
-        # a google sheet URL pasted directly
+        # a google sheet URL pasted directly → ask what to do (never auto-run)
         if "docs.google.com/spreadsheets" in text:
-            self.handle_sheet(chat, _URL_RE.search(text).group(0))
+            self.pending[chat] = {"await": "sheet_action",
+                                  "source": _URL_RE.search(text).group(0)}
+            self.bot.send(chat, "What do you want to do with this sheet?", keyboard=[
+                [{"text": "🔎 Enrich (find LinkedIn/website)", "callback_data": "act:enrich"}],
+                [{"text": "✉️ Personalize — Cold Email", "callback_data": "act:pzemail"}],
+                [{"text": "📸 Personalize — Instagram DM", "callback_data": "act:pzig"}],
+            ])
             return
 
         # plain URLs → run
@@ -628,6 +634,19 @@ class App:
             nav(f"{kind} selected.\nSend a public Google Sheet URL with your leads "
                 f"(needs name + article URL columns; email carried through).",
                 [[{"text": "⬅️ Back", "callback_data": "m:pz"}]])
+            return
+        if data.startswith("act:"):
+            pend = self.pending.pop(chat, None)
+            src = (pend or {}).get("source", "")
+            if not src:
+                self.bot.send(chat, "Sheet link expired — paste it again."); return
+            action = data.split(":")[1]
+            if action == "enrich":
+                self.handle_sheet(chat, src)
+            elif action == "pzemail":
+                self.start_personalizer(chat, src, "email")
+            elif action == "pzig":
+                self.start_personalizer(chat, src, "ig")
             return
         if data.startswith("pzcol:"):
             pend = self.pending.pop(chat, None)
