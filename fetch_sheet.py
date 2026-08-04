@@ -52,6 +52,17 @@ def guess_url_column(headers: list[str]) -> str | None:
     return None
 
 
+def guess_name_column(headers: list[str]) -> str | None:
+    """Best-guess the column holding the person's name."""
+    for exact in ("full_name", "Full Name", "Name", "name"):
+        for h in headers:
+            if h.strip().lower() == exact.lower():
+                return h
+    cands = [h for h in headers if "name" in h.lower()
+             and not any(k in h.lower() for k in ("company", "first", "last", "user"))]
+    return cands[0] if len(cands) == 1 else None
+
+
 def fetch_urls(sheet_url: str, column: str = "Article URL") -> list[str]:
     sid, gid = sheets_fetcher.parse_sheet_url(sheet_url)
     csv_url = (

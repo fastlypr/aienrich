@@ -272,10 +272,17 @@ def main():
         sys.stderr.write("no columns found in the input.\n")
         return 1
 
-    name_col = pick_col(source_fields, ["full_name", "Name", "name", "Full Name"])
-    article_col = pick_col(source_fields, ["article_url", "article", "Article", "url", "URL"])
+    # Explicit column overrides (from the bot's mapping step) win over auto-detect.
+    name_col = (os.environ.get("NAME_COL") or "").strip() \
+        or pick_col(source_fields, ["full_name", "Name", "name", "Full Name"])
+    article_col = (os.environ.get("ARTICLE_COL") or "").strip() \
+        or pick_col(source_fields, ["article_url", "article", "Article", "url", "URL"])
     linkedin_col = pick_col(source_fields, ["linkedin", "LinkedIn", "linkedin_url"])
     email_col = pick_col(source_fields, ["email", "Email", "email_address", "Email Address"])
+    if name_col not in source_fields:
+        name_col = None
+    if article_col not in source_fields:
+        article_col = None
     if not name_col or not article_col:
         sys.stderr.write(f"could not find name/article columns in: {source_fields}\n")
         return 1

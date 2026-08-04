@@ -395,7 +395,29 @@ class App:
             self.bot.send(chat, final, keyboard=kb, parse_mode="HTML")
 
     # -- personalizer (vendored cold-emails scripts, run as-is)
-    def run_personalizer(self, chat: int, source: str, mode: str) -> None:
+    def start_personalizer(self, chat: int, source: str, mode: str) -> None:
+        """Map the article/name columns (ask if unsure), then run."""
+        try:
+            headers = fetch_sheet.get_headers(source)
+        except Exception as exc:
+            self.bot.send(chat, f"Couldn't read that sheet (shared 'Anyone with the link'?):\n{exc}")
+            return
+        if not headers:
+            self.bot.send(chat, "That sheet looks empty."); return
+        article_col = fetch_sheet.guess_url_column(headers)
+        name_col = fetch_sheet.guess_name_column(headers) or ""
+        log.info("✍ pz headers=%s · article=%r · name=%r", headers, article_col, name_col)
+        if article_col:
+            self.run_personalizer(chat, source, mode, name_col, article_col)
+        else:
+            self.pending[chat] = {"await": "pz_col", "mode": mode, "source": source,
+                                  "headers": headers, "name_col": name_col}
+            rows = [[{"text": h, "callback_data": f"pzcol:{i}"}] for i, h in enumerate(headers)]
+            rows.append([{"text": "⬅️ Back", "callback_data": "m:pz"}])
+            self.bot.send(chat, "Which column has the ARTICLE URL to fetch?", keyboard=rows)
+
+    def run_personalizer(self, chat: int, source: str, mode: str,
+                         name_col: str = "", article_col: str = "") -> None:
         cfg = self.cfg()
         here = Path(__file__).resolve().parent
         script = here / "personalizer" / ("run_ig.py" if mode == "ig" else "run_all.py")
@@ -415,6 +437,10 @@ class App:
         env["NVIDIA_API_KEY"] = cfg.get("nvidia_api_key") or os.getenv("NVIDIA_API_KEY", "")
         if cfg.get("nvidia_model"):
             env["NVIDIA_MODEL"] = cfg["nvidia_model"]
+        if article_col:
+            env["ARTICLE_COL"] = article_col
+        if name_col:
+            env["NAME_COL"] = name_col
         env.setdefault("RPM", "38")
         env.setdefault("CONCURRENCY", "5")
 
@@ -437,9 +463,13 @@ class App:
                                 cwd=str(here), env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, bufsize=1)
+        tail: list[str] = []
         for line in proc.stdout:
             line = line.rstrip()
             log.info("   ✍ %s", line)
+            if line:
+                tail.append(line)
+                tail = tail[-6:]
             m = re.search(r"Processing (\d+) leads", line)
             if m:
                 total = int(m.group(1))
@@ -462,7 +492,9 @@ class App:
         if Path(out).exists():
             self.bot.send_document(chat, Path(out), caption=Path(out).name)
         else:
-            self.bot.send(chat, "No output file produced — check the logs.")
+            why = "\n".join(tail[-4:]) or "no output"
+            self.bot.send(chat, f"No output file produced. Last output:\n<pre>{html.escape(why)}</pre>",
+                          parse_mode="HTML")
 
     # -- google sheet
     def handle_sheet(self, chat: int, sheet_url: str) -> None:
@@ -507,7 +539,7 @@ class App:
             url = _URL_RE.search(text)
             if not url or "docs.google.com" not in text:
                 self.bot.send(chat, "Send a public Google Sheet URL."); return
-            self.run_personalizer(chat, url.group(0), pend["mode"]); return
+            self.start_personalizer(chat, url.group(0), pend["mode"]); return
         if pend and pend.get("await") == "add_key":
             provider = pend["provider"]
             cfg = self.cfg()
@@ -587,6 +619,13 @@ class App:
             nav(f"{kind} selected.\nSend a public Google Sheet URL with your leads "
                 f"(needs name + article URL columns; email carried through).",
                 [[{"text": "⬅️ Back", "callback_data": "m:pz"}]])
+            return
+        if data.startswith("pzcol:"):
+            pend = self.pending.pop(chat, None)
+            if pend and pend.get("await") == "pz_col":
+                article_col = pend["headers"][int(data.split(":")[1])]
+                self.run_personalizer(chat, pend["source"], pend["mode"],
+                                      pend.get("name_col", ""), article_col)
             return
         if data == "pzdl":
             out = getattr(self, "_pz_last", None)
