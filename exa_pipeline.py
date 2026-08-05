@@ -97,7 +97,7 @@ def _clean_category(value: str) -> str:
 
 def extract_facts_with_category(article_text: str, client: NvidiaClient) -> dict:
     prompt = f"{_EXTRACT_PROMPT}\n\nArticle text:\n{article_text}"
-    data = _chat_json_retry(client, prompt, max_tokens=4000)
+    data = _chat_json_retry(client, prompt, max_tokens=16000)
 
     return {
         "name": str(data.get("name") or "").strip(),
@@ -223,7 +223,7 @@ def match_profiles(
     try:
         # Large budget so reasoning models (gpt-oss-120b) can finish thinking
         # AND still emit the final JSON.
-        data = _chat_json_retry(client, _match_prompt(facts, results), max_tokens=4000)
+        data = _chat_json_retry(client, _match_prompt(facts, results), max_tokens=16000)
     except Exception:
         return out
 
