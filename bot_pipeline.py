@@ -22,6 +22,7 @@ def enrich(
     client: NvidiaClient,
     do_search: Callable[[str], tuple[str | None, list[dict]]],
     *,
+    want_website: bool = True,
     log: Callable[[str], None] = lambda _m: None,
 ) -> dict:
     rec = {
@@ -58,7 +59,7 @@ def enrich(
         # Two separate searches — one biased for the LinkedIn profile, one for
         # the website — then merge the candidates so each has its best shot.
         li_q = build_query_linkedin(facts)
-        web_q = build_query_website(facts)
+        web_q = build_query_website(facts) if want_website else ""
         providers: list[str] = []
         hits: list[dict] = []
         seen: set[str] = set()
@@ -83,7 +84,7 @@ def enrich(
         log("matching profiles (LLM)…")
         matched = match_profiles(facts, hits, client, article_url=url)
         rec["linkedin"] = matched["linkedin"]
-        rec["website"] = matched["website"]
+        rec["website"] = matched["website"] if want_website else "Not found"
         log(f"matched → LinkedIn={rec['linkedin']} · Website={rec['website']}")
     except Exception as exc:  # noqa: BLE001
         rec["status"] = "error"

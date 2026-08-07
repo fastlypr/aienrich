@@ -183,6 +183,8 @@ def settings_menu(cfg: dict) -> list:
     return [
         [{"text": f"🔎 Search mode: {mode_label}", "callback_data": "s:mode"}],
         [{"text": f"🧠 NVIDIA model: {model.split('/')[-1]}", "callback_data": "s:model"}],
+        [{"text": f"🌐 Website search: {'on' if cfg.get('website_enabled', '1') == '1' else 'off'}",
+          "callback_data": "s:web"}],
         [{"text": "🔑 Provider API keys", "callback_data": "s:keys"}],
         [{"text": f"🗂 Notion: {notion}", "callback_data": "s:notion"}],
         [{"text": "⬅️ Back", "callback_data": "m:home"}],
@@ -343,6 +345,7 @@ class App:
             log.info("[%d/%d] %s", i, total, url)
             t0 = time.time()
             rec = enrich(url, client, do_search,
+                         want_website=cfg.get("website_enabled", "1") == "1",
                          log=lambda m, i=i: log.info("   ├ [%d] %s", i, m))
             dt = time.time() - t0
             results_store.append_row(path, name, rec)
@@ -789,6 +792,11 @@ class App:
         if data == "s:notion":
             cfg["notion_enabled"] = "0" if cfg.get("notion_enabled") == "1" else "1"
             config.save(cfg)
+            nav("⚙️ Settings", settings_menu(cfg)); return
+        if data == "s:web":
+            cfg["website_enabled"] = "0" if cfg.get("website_enabled", "1") == "1" else "1"
+            config.save(cfg)
+            log.info("⚙ website search → %s", cfg["website_enabled"])
             nav("⚙️ Settings", settings_menu(cfg)); return
 
         if data.startswith("k:add:"):
