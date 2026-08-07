@@ -7,10 +7,12 @@ free-tier monthly limits). All-time totals persist across months.
 from __future__ import annotations
 
 import json
+import threading
 from datetime import date
 from pathlib import Path
 
 STATS_FILE = ".aienrich_stats.json"
+_LOCK = threading.Lock()
 
 
 def _load() -> dict:
@@ -42,22 +44,24 @@ class Stats:
         Path(STATS_FILE).write_text(json.dumps(self.d, indent=2), encoding="utf-8")
 
     def record_search(self, provider: str) -> None:
-        self.d["providers"].setdefault(provider, {"searches": 0})
-        self.d["providers"][provider]["searches"] += 1
-        self._save()
+        with _LOCK:
+            self.d["providers"].setdefault(provider, {"searches": 0})
+            self.d["providers"][provider]["searches"] += 1
+            self._save()
 
     def record_result(self, rec: dict) -> None:
-        t = self.d["totals"]
-        t["urls"] += 1
-        if rec.get("status") == "ok":
-            t["ok"] += 1
-        else:
-            t["error"] += 1
-        if rec.get("linkedin") not in ("", "Not found", None):
-            t["linkedin"] += 1
-        if rec.get("website") not in ("", "Not found", None):
-            t["website"] += 1
-        self._save()
+        with _LOCK:
+            t = self.d["totals"]
+            t["urls"] += 1
+            if rec.get("status") == "ok":
+                t["ok"] += 1
+            else:
+                t["error"] += 1
+            if rec.get("linkedin") not in ("", "Not found", None):
+                t["linkedin"] += 1
+            if rec.get("website") not in ("", "Not found", None):
+                t["website"] += 1
+            self._save()
 
     def summary(self) -> str:
         t = self.d["totals"]

@@ -22,11 +22,31 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+
+class RateLimiter:
+    """Thread-safe cap: at most `rpm` acquisitions per minute (min-interval)."""
+
+    def __init__(self, rpm: float) -> None:
+        self.interval = 60.0 / max(rpm, 1.0)
+        self._lock = threading.Lock()
+        self._next = 0.0
+
+    def wait(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            t = max(now, self._next)
+            self._next = t + self.interval
+            delay = t - now
+        if delay > 0:
+            time.sleep(delay)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 # Quiet the noisy HTTP client loggers from the OpenAI SDK / urllib3.
@@ -47,12 +67,13 @@ from bot_stats import Stats
 import http_utils
 
 NVIDIA_MODELS = [
-    "mistralai/mistral-small-4-119b-2603",
-    "meta/llama-3.1-70b-instruct",
-    "meta/llama-3.3-70b-instruct",
-    "meta/llama-3.1-8b-instruct",
     "openai/gpt-oss-120b",
+    "nvidia/nemotron-3-ultra-550b-a55b",
+    "meta/llama-3.3-70b-instruct",
+    "meta/llama-3.1-70b-instruct",
+    "meta/llama-3.1-8b-instruct",
     "nvidia/llama-3.1-nemotron-70b-instruct",
+    "mistralai/mistral-small-4-119b-2603",
 ]
 
 _URL_RE = re.compile(r"https?://\S+", re.I)
@@ -341,42 +362,51 @@ class App:
             parse_mode="HTML")
         last_edit = 0.0
 
-        for i, url in enumerate(urls, 1):
-            log.info("[%d/%d] %s", i, total, url)
-            t0 = time.time()
-            rec = enrich(url, client, do_search,
-                         want_website=cfg.get("website_enabled", "1") == "1",
-                         log=lambda m, i=i: log.info("   ├ [%d] %s", i, m))
-            dt = time.time() - t0
-            results_store.append_row(path, name, rec)
-            stats.record_result(rec)
-            recs.append(rec)
+        # Concurrency + rate cap. Each URL makes ~2 NVIDIA calls (extract +
+        # match), so cap URL starts at rpm/2 to stay under the 40 rpm limit.
+        rpm = float(cfg.get("rpm", "38"))
+        workers = int(cfg.get("concurrency", "6"))
+        want_web = cfg.get("website_enabled", "1") == "1"
+        limiter = RateLimiter(rpm / 2)
+        lock = threading.Lock()
+        done_n = 0
 
-            if rec["status"] == "ok":
-                ok_n += 1
-                log.info("   └ [%d] ✅ done in %.1fs", i, dt)
-            else:
-                err_n += 1
-                log.info("   └ [%d] ❌ %s (%.1fs)", i, rec["error"], dt)
-            if rec["linkedin"] not in ("", "Not found"):
-                li_n += 1
-            if rec["website"] not in ("", "Not found"):
-                web_n += 1
+        def worker(u: str) -> dict:
+            limiter.wait()
+            log.info("→ %s", u)
+            return enrich(u, client, do_search, want_website=want_web,
+                          log=lambda m, u=u: log.info("   ├ %s", m))
 
-            if notion:
-                try:
-                    import notion_writer_exa
-                    notion_writer_exa.upsert(cfg["notion_token"], cfg["notion_db_id"], rec, nprops)
-                except Exception as exc:
-                    log.warning("   ├ [%d] notion write failed: %s", i, exc)
-
-            # Throttle edits so Telegram doesn't rate-limit us.
-            now = time.time()
-            if msg_id and (now - last_edit >= 2.0 or i == total):
-                self.bot.edit(chat, msg_id, self._progress_text(
-                    name, i, total, ok_n, err_n, li_n, web_n, rec, t_start),
-                    parse_mode="HTML")
-                last_edit = now
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(worker, u) for u in urls]
+            for fut in as_completed(futures):
+                rec = fut.result()
+                with lock:
+                    done_n += 1
+                    results_store.append_row(path, name, rec)
+                    stats.record_result(rec)
+                    recs.append(rec)
+                    if rec["status"] == "ok":
+                        ok_n += 1
+                    else:
+                        err_n += 1
+                    if rec["linkedin"] not in ("", "Not found"):
+                        li_n += 1
+                    if rec["website"] not in ("", "Not found"):
+                        web_n += 1
+                    if notion:
+                        try:
+                            import notion_writer_exa
+                            notion_writer_exa.upsert(cfg["notion_token"], cfg["notion_db_id"], rec, nprops)
+                        except Exception as exc:
+                            log.warning("notion write failed: %s", exc)
+                    log.info("[%d/%d] %s · %s", done_n, total, rec["name"], rec["status"])
+                    now = time.time()
+                    if msg_id and (now - last_edit >= 2.0 or done_n == total):
+                        self.bot.edit(chat, msg_id, self._progress_text(
+                            name, done_n, total, ok_n, err_n, li_n, web_n, rec, t_start),
+                            parse_mode="HTML")
+                        last_edit = now
 
         log.info("✔ RUN done · %d ok · %d error(s) · file=%r", ok_n, err_n, name)
         final = self._progress_text(
