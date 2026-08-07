@@ -334,7 +334,28 @@ class App:
 
         stats = Stats()
         client = self.client(cfg)
-        do_search = self.do_search_fn(cfg, stats)
+        # The search provider's own limit (~10-20/min) is the real ceiling —
+        # cap search calls globally, separate from the NVIDIA rpm cap, and
+        # retry the transient 502/503 blips.
+        base_search = self.do_search_fn(cfg, stats)
+        search_rpm = float(cfg.get("search_rpm", "15"))
+        search_limiter = RateLimiter(search_rpm)
+
+        def do_search(q):
+            last = None
+            for attempt in range(3):
+                search_limiter.wait()
+                try:
+                    return base_search(q)
+                except Exception as exc:  # noqa: BLE001
+                    last = exc
+                    if any(s in str(exc) for s in ("502", "503", "Bad Gateway",
+                                                   "Gateway", "rate")) and attempt < 2:
+                        time.sleep(2 * (attempt + 1))
+                        continue
+                    raise
+            raise last
+
         path, name = results_store.new_result_file()
         mode = ("waterfall" if cfg.get("search_mode") == "waterfall"
                 else f"single:{cfg.get('single_provider', 'exa')}")
