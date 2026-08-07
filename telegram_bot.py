@@ -158,6 +158,7 @@ class Bot:
 def main_menu() -> list:
     return [
         [{"text": "▶️ Run (paste URLs)", "callback_data": "m:run"}],
+        [{"text": "🧩 Extract only (name/company)", "callback_data": "m:ex"}],
         [{"text": "✍️ Personalizer", "callback_data": "m:pz"}],
         [{"text": "📥 Download results", "callback_data": "m:dl"},
          {"text": "📊 Stats", "callback_data": "m:stats"}],
@@ -394,6 +395,74 @@ class App:
         else:
             self.bot.send(chat, final, keyboard=kb, parse_mode="HTML")
 
+    # -- extract-only (fetch + LLM name/company; NO search) → url,name,company,status,error
+    def run_extract(self, chat: int, urls: list[str]) -> None:
+        import csv as _csv
+        from exa_pipeline import extract_facts_with_category
+        cfg = self.cfg()
+        if not (cfg.get("nvidia_api_key") or os.getenv("NVIDIA_API_KEY")):
+            self.bot.send(chat, "⚠️ No NVIDIA key set (Settings → Provider API keys)."); return
+
+        client = self.client(cfg)
+        Path("results").mkdir(exist_ok=True)
+        base = f"results/Extract {date.today().strftime('%b-%d')}"
+        out = f"{base}.csv"
+        i = 2
+        while Path(out).exists():
+            out = f"{base} ({i}).csv"; i += 1
+        fields = ["url", "name", "company", "status", "error"]
+        with open(out, "w", newline="", encoding="utf-8") as fh:
+            _csv.DictWriter(fh, fieldnames=fields).writeheader()
+
+        total = len(urls)
+        ok_n = err_n = 0
+        t0 = time.time()
+        log.info("🧩 EXTRACT started · %d URL(s) · file=%r", total, out)
+        msg_id = self.bot.send(chat, f"🧩 Extracting {total} URL(s)…")
+        last_edit = 0.0
+
+        def card(done, last, finished=False):
+            head = "✅ Extract Complete" if finished else "🧩 Extracting"
+            pct = int(done / total * 100) if total else 0
+            body = [f"{done} / {total} ({pct}%)", "",
+                    f"✅ ok     {ok_n}", f"❌ failed {err_n}",
+                    f"⏱ {self._fmt_dur(time.time() - t0)}"]
+            txt = f"<b>{head}</b>\n\n<pre>{html.escape(chr(10).join(body))}</pre>"
+            if last and not finished:
+                txt += f"\n<i>{html.escape(last)}</i>"
+            return txt
+
+        from agent_fetch import fetch_article_text
+        for idx, url in enumerate(urls, 1):
+            rec = {"url": url, "name": "Not found", "company": "Not found",
+                   "status": "ok", "error": ""}
+            try:
+                text = fetch_article_text(url)
+                if len(text) < 200:
+                    rec["status"] = "error"; rec["error"] = "Article too short/unreachable"
+                else:
+                    facts = extract_facts_with_category(text, client)
+                    rec["name"] = facts.get("name") or "Not found"
+                    rec["company"] = facts.get("company") or "Not found"
+            except Exception as exc:
+                rec["status"] = "error"; rec["error"] = f"{type(exc).__name__}: {exc}"
+            with open(out, "a", newline="", encoding="utf-8") as fh:
+                _csv.DictWriter(fh, fieldnames=fields).writerow(rec)
+            ok_n += rec["status"] == "ok"; err_n += rec["status"] != "ok"
+            log.info("🧩 [%d/%d] %s · %s", idx, total, rec["name"], rec["status"])
+            now = time.time()
+            if msg_id and (now - last_edit >= 2.0 or idx == total):
+                self.bot.edit(chat, msg_id, card(idx, f"{rec['name']} — {rec['company']}"),
+                              parse_mode="HTML")
+                last_edit = now
+
+        log.info("🧩 EXTRACT done · ok=%d err=%d", ok_n, err_n)
+        kb = [[{"text": "📥 Download CSV", "callback_data": "exdl"}]]
+        self._ex_last = out
+        if msg_id:
+            self.bot.edit(chat, msg_id, card(total, "", finished=True), keyboard=kb, parse_mode="HTML")
+        self.bot.send_document(chat, Path(out), caption=Path(out).name)
+
     # -- personalizer (vendored cold-emails scripts, run as-is)
     def start_personalizer(self, chat: int, source: str, mode: str) -> None:
         """Map the article/name columns (ask if unsure), then run."""
@@ -543,6 +612,28 @@ class App:
 
         # pending multi-step input?
         pend = self.pending.get(chat)
+        if pend and pend.get("await") == "ex_input":
+            self.pending.pop(chat, None)
+            if "docs.google.com/spreadsheets" in text:
+                src = _URL_RE.search(text).group(0)
+                try:
+                    headers = fetch_sheet.get_headers(src)
+                    col = fetch_sheet.guess_url_column(headers)
+                    if not col:
+                        self.bot.send(chat, f"Couldn't detect the article column in {headers}. "
+                                            f"Paste article URLs directly instead."); return
+                    urls = fetch_sheet.fetch_urls(src, col)
+                except Exception as exc:
+                    self.bot.send(chat, f"Sheet error: {exc}"); return
+            else:
+                urls, seen = [], set()
+                for m in _URL_RE.findall(text):
+                    n = url_utils.normalize(m)
+                    if n and n not in seen:
+                        seen.add(n); urls.append(n)
+            if not urls:
+                self.bot.send(chat, "No URLs found."); return
+            self.run_extract(chat, urls); return
         if pend and pend.get("await") == "pz_input":
             self.pending.pop(chat, None)
             url = _URL_RE.search(text)
@@ -584,6 +675,7 @@ class App:
                                   "source": _URL_RE.search(text).group(0)}
             self.bot.send(chat, "What do you want to do with this sheet?", keyboard=[
                 [{"text": "🔎 Enrich (find LinkedIn/website)", "callback_data": "act:enrich"}],
+                [{"text": "🧩 Extract only (name/company)", "callback_data": "act:extract"}],
                 [{"text": "✉️ Personalize — Cold Email", "callback_data": "act:pzemail"}],
                 [{"text": "📸 Personalize — Instagram DM", "callback_data": "act:pzig"}],
             ])
@@ -625,6 +717,19 @@ class App:
             nav("⚙️ Settings", settings_menu(cfg)); return
         if data == "m:dl":
             self.show_downloads(chat, msg_id); return
+        if data == "m:ex":
+            self.pending[chat] = {"await": "ex_input"}
+            nav("🧩 Extract only — saves URL, Name, Company (no search).\n"
+                "Paste article URLs (one per line) or a Google Sheet URL.",
+                [[{"text": "⬅️ Back", "callback_data": "m:home"}]])
+            return
+        if data == "exdl":
+            out = getattr(self, "_ex_last", None)
+            if out and Path(out).exists():
+                self.bot.send_document(chat, Path(out), caption=Path(out).name)
+            else:
+                self.bot.send(chat, "No extract file available.")
+            return
         if data == "m:pz":
             nav("✍️ Personalizer — pick a mode:", personalizer_menu()); return
         if data in ("pz:email", "pz:ig"):
@@ -643,6 +748,16 @@ class App:
             action = data.split(":")[1]
             if action == "enrich":
                 self.handle_sheet(chat, src)
+            elif action == "extract":
+                try:
+                    headers = fetch_sheet.get_headers(src)
+                    col = fetch_sheet.guess_url_column(headers)
+                    urls = fetch_sheet.fetch_urls(src, col) if col else []
+                except Exception as exc:
+                    self.bot.send(chat, f"Sheet error: {exc}"); return
+                if not urls:
+                    self.bot.send(chat, "Couldn't detect the article column."); return
+                self.run_extract(chat, urls)
             elif action == "pzemail":
                 self.start_personalizer(chat, src, "email")
             elif action == "pzig":
