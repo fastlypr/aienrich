@@ -14,7 +14,7 @@ from typing import Callable
 from agent_fetch import fetch_article_text
 from agent_nvidia import NvidiaClient
 from exa_pipeline import extract_facts_with_category, match_profiles
-from exa_search import build_query
+from exa_search import build_query_linkedin, build_query_website
 
 
 def enrich(
@@ -55,11 +55,28 @@ def enrich(
         rec["company"] = facts.get("company") or "Not found"
         log(f"extracted: {rec['name']} · {rec['company']} · {facts['category']}")
 
-        query = build_query(facts)
-        log(f"searching: {query}")
-        provider, hits = do_search(query)
-        rec["provider"] = provider or ""
-        log(f"{len(hits)} result(s)" + (f" via {provider}" if provider else " (no provider)"))
+        # Two separate searches — one biased for the LinkedIn profile, one for
+        # the website — then merge the candidates so each has its best shot.
+        li_q = build_query_linkedin(facts)
+        web_q = build_query_website(facts)
+        providers: list[str] = []
+        hits: list[dict] = []
+        seen: set[str] = set()
+        for label, q in (("linkedin", li_q), ("website", web_q)):
+            if not q:
+                continue
+            log(f"searching ({label}): {q}")
+            prov, h = do_search(q)
+            if prov:
+                providers.append(prov)
+            log(f"  {len(h)} result(s)" + (f" via {prov}" if prov else ""))
+            for hit in h:
+                key = (hit.get("url") or "").split("?")[0].rstrip("/").lower()
+                if key and key not in seen:
+                    seen.add(key)
+                    hits.append(hit)
+        rec["provider"] = providers[0] if providers else ""
+        log(f"{len(hits)} combined candidate(s)")
         if not hits:
             return rec
 

@@ -41,6 +41,27 @@ def build_query(facts: dict) -> str:
     return f"{name}{anchor} LinkedIn & website".strip()
 
 
+def build_query_linkedin(facts: dict) -> str:
+    """`{name} {company} linkedin` (falls back to role, then bare name)."""
+    name = (facts.get("name") or "").strip()
+    if not name:
+        return ""
+    company = (facts.get("company") or "").strip()
+    role = (facts.get("role") or "").strip()
+    anchor = f" {company}" if company else (f" {role}" if role else "")
+    return f"{name}{anchor} linkedin".strip()
+
+
+def build_query_website(facts: dict) -> str:
+    """`{name} {company} website` (falls back to bare name)."""
+    name = (facts.get("name") or "").strip()
+    if not name:
+        return ""
+    company = (facts.get("company") or "").strip()
+    anchor = f" {company}" if company else ""
+    return f"{name}{anchor} website".strip()
+
+
 def _highlights_to_text(result: Any) -> str:
     """Pull a snippet string out of an Exa result's highlights/text."""
     highlights = getattr(result, "highlights", None)
