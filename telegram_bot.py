@@ -365,7 +365,9 @@ class App:
         # Concurrency + rate cap. Each URL makes ~2 NVIDIA calls (extract +
         # match), so cap URL starts at rpm/2 to stay under the 40 rpm limit.
         rpm = float(cfg.get("rpm", "38"))
-        workers = int(cfg.get("concurrency", "6"))
+        # High worker count so slow reasoning models still saturate the rpm cap;
+        # the RateLimiter (not the worker count) is what prevents 429s.
+        workers = int(cfg.get("concurrency", "20"))
         want_web = cfg.get("website_enabled", "1") == "1"
         limiter = RateLimiter(rpm / 2)
         lock = threading.Lock()
