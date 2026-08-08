@@ -467,7 +467,7 @@ class App:
         i = 2
         while Path(out).exists():
             out = f"{base} ({i}).csv"; i += 1
-        fields = ["url", "name", "company", "status", "error"]
+        fields = ["url", "name", "company", "category", "status", "error"]
         with open(out, "w", newline="", encoding="utf-8") as fh:
             _csv.DictWriter(fh, fieldnames=fields).writeheader()
 
@@ -490,28 +490,47 @@ class App:
             return txt
 
         from agent_fetch import fetch_article_text
-        for idx, url in enumerate(urls, 1):
-            rec = {"url": url, "name": "Not found", "company": "Not found",
-                   "status": "ok", "error": ""}
+        # No search step here → only limited by NVIDIA's ~40 rpm (1 call/URL),
+        # so we can run wide and fast.
+        limiter = RateLimiter(float(cfg.get("rpm", "38")))
+        workers = int(cfg.get("extract_concurrency", "10"))
+        lock = threading.Lock()
+        done_n = 0
+
+        def worker(u: str) -> dict:
+            rec = {"url": u, "name": "Not found", "company": "Not found",
+                   "category": "public figure", "status": "ok", "error": ""}
             try:
-                text = fetch_article_text(url)
+                text = fetch_article_text(u)
                 if len(text) < 200:
                     rec["status"] = "error"; rec["error"] = "Article too short/unreachable"
                 else:
+                    limiter.wait()
                     facts = extract_facts_with_category(text, client)
                     rec["name"] = facts.get("name") or "Not found"
                     rec["company"] = facts.get("company") or "Not found"
+                    rec["category"] = facts.get("category") or "public figure"
             except Exception as exc:
                 rec["status"] = "error"; rec["error"] = f"{type(exc).__name__}: {exc}"
-            with open(out, "a", newline="", encoding="utf-8") as fh:
-                _csv.DictWriter(fh, fieldnames=fields).writerow(rec)
-            ok_n += rec["status"] == "ok"; err_n += rec["status"] != "ok"
-            log.info("🧩 [%d/%d] %s · %s", idx, total, rec["name"], rec["status"])
-            now = time.time()
-            if msg_id and (now - last_edit >= 2.0 or idx == total):
-                self.bot.edit(chat, msg_id, card(idx, f"{rec['name']} — {rec['company']}"),
-                              parse_mode="HTML")
-                last_edit = now
+            return rec
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(worker, u) for u in urls]
+            for fut in as_completed(futures):
+                rec = fut.result()
+                with lock:
+                    done_n += 1
+                    with open(out, "a", newline="", encoding="utf-8") as fh:
+                        _csv.DictWriter(fh, fieldnames=fields).writerow(rec)
+                    ok_n += rec["status"] == "ok"; err_n += rec["status"] != "ok"
+                    log.info("🧩 [%d/%d] %s · %s · %s",
+                             done_n, total, rec["name"], rec.get("category", ""), rec["status"])
+                    now = time.time()
+                    if msg_id and (now - last_edit >= 2.0 or done_n == total):
+                        self.bot.edit(chat, msg_id,
+                                      card(done_n, f"{rec['name']} — {rec['company']}"),
+                                      parse_mode="HTML")
+                        last_edit = now
 
         log.info("🧩 EXTRACT done · ok=%d err=%d", ok_n, err_n)
         kb = [[{"text": "📥 Download CSV", "callback_data": "exdl"}]]
