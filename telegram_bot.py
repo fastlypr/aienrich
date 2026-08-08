@@ -338,7 +338,7 @@ class App:
         # cap search calls globally, separate from the NVIDIA rpm cap, and
         # retry the transient 502/503 blips.
         base_search = self.do_search_fn(cfg, stats)
-        search_rpm = float(cfg.get("search_rpm", "15"))
+        search_rpm = float(cfg.get("search_rpm", "10"))
         search_limiter = RateLimiter(search_rpm)
 
         def do_search(q):
@@ -386,9 +386,10 @@ class App:
         # Concurrency + rate cap. Each URL makes ~2 NVIDIA calls (extract +
         # match), so cap URL starts at rpm/2 to stay under the 40 rpm limit.
         rpm = float(cfg.get("rpm", "38"))
-        # High worker count so slow reasoning models still saturate the rpm cap;
-        # the RateLimiter (not the worker count) is what prevents 429s.
-        workers = int(cfg.get("concurrency", "20"))
+        # Conservative default — the search endpoint (~10/min) is the real
+        # ceiling, so a small worker count is plenty. Raise later when you add
+        # more search providers / a higher plan.
+        workers = int(cfg.get("concurrency", "4"))
         want_web = cfg.get("website_enabled", "1") == "1"
         limiter = RateLimiter(rpm / 2)
         lock = threading.Lock()
