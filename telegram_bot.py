@@ -625,6 +625,11 @@ class App:
         env.setdefault("RPM", "38")
         env.setdefault("CONCURRENCY", "5")
         env["PYTHONUNBUFFERED"] = "1"  # stream child prints live (not block-buffered)
+        # Force UTF-8 so non-ASCII article text doesn't crash under a C locale.
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
+        env.setdefault("LANG", "C.UTF-8")
+        env.setdefault("LC_ALL", "C.UTF-8")
 
         kind = "Instagram DM" if mode == "ig" else "Cold Email"
         log.info("✍ personalizer start · %s · %s → %s", kind, source[:60], out)
