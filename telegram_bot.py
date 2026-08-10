@@ -216,7 +216,8 @@ def settings_menu(cfg: dict) -> list:
     mode_label = f"waterfall" if mode == "waterfall" else f"single: {single}"
     return [
         [{"text": f"🔎 Search mode: {mode_label}", "callback_data": "s:mode"}],
-        [{"text": f"🧠 NVIDIA model: {model.split('/')[-1]}", "callback_data": "s:model"}],
+        [{"text": f"🧠 {'OpenCode' if model in OPENCODE_MODELS else 'NVIDIA'} model: "
+                  f"{model.split('/')[-1]}", "callback_data": "s:model"}],
         [{"text": f"🌐 Website search: {'on' if cfg.get('website_enabled', '1') == '1' else 'off'}",
           "callback_data": "s:web"}],
         [{"text": "🔑 Provider API keys", "callback_data": "s:keys"}],
