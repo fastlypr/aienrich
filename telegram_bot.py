@@ -604,15 +604,24 @@ class App:
 
         env = dict(os.environ)
         env["OUT"] = out
-        env["NVIDIA_API_KEY"] = cfg.get("nvidia_api_key") or os.getenv("NVIDIA_API_KEY", "")
-        if cfg.get("nvidia_model"):
-            env["NVIDIA_MODEL"] = cfg["nvidia_model"]
+        model = cfg.get("nvidia_model") or ""
+        if model:
+            env["NVIDIA_MODEL"] = model
+        # Route OpenCode models to the OpenCode endpoint + key; else NVIDIA.
+        if model in OPENCODE_MODELS:
+            env["NVIDIA_BASE_URL"] = OPENCODE_BASE
+            env["NVIDIA_API_KEY"] = cfg.get("opencode_api_key") or os.getenv("OPENCODE_API_KEY", "")
+        else:
+            env["NVIDIA_API_KEY"] = cfg.get("nvidia_api_key") or os.getenv("NVIDIA_API_KEY", "")
         if article_col:
             env["ARTICLE_COL"] = article_col
         if name_col:
             env["NAME_COL"] = name_col
         if username_col:
             env["USERNAME_COL"] = username_col
+        # RETRY: '' = only redo empty/failed (resume); 'all' = redo everything
+        # (set config pz_retry='all' to bypass the "already personalized" skip).
+        env["RETRY"] = cfg.get("pz_retry", "")
         env.setdefault("RPM", "38")
         env.setdefault("CONCURRENCY", "5")
         env["PYTHONUNBUFFERED"] = "1"  # stream child prints live (not block-buffered)

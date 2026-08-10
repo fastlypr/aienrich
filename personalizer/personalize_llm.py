@@ -119,7 +119,9 @@ def main():
     except ImportError:
         die("the 'openai' package is not installed. Run: pip install openai", 2)
 
-    client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
+    # A real User-Agent so gateways like Cloudflare (OpenCode) don't 403 (1010).
+    client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout,
+                    default_headers={"User-Agent": "aienrich/1.0"})
 
     # Reasoning controls differ by model family. Nemotron uses an explicit
     # thinking toggle + budget; gpt-oss uses a reasoning_effort level. Other
