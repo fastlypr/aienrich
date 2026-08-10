@@ -195,6 +195,16 @@ def main():
         except Exception as exc:  # noqa: BLE001 — surface/inspect any API/client error
             last_err = str(exc)
             retryable = any(m in last_err.lower() for m in transient)
+            # Old httpx/openai on a C-locale box encode the request as ASCII and
+            # crash on non-ASCII article text. Strip accents/smart-quotes and
+            # retry so it works without upgrading libraries.
+            if "ascii" in last_err.lower() and "codec" in last_err.lower():
+                import unicodedata
+                def _ascii(s):
+                    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
+                system_prompt = _ascii(system_prompt)
+                user_msg = _ascii(user_msg)
+                retryable = True
 
         if attempt < max_retries and retryable:
             wait = min(base_backoff * (2 ** attempt), 15.0) + random.uniform(0, 1)
