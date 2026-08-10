@@ -19,6 +19,14 @@ the VM). Errors go to stderr; only the article text goes to stdout.
 
 import sys
 
+# Force UTF-8 stdio so non-ASCII article text works under any locale (the VM's
+# systemd C locale otherwise defaults pipes to ASCII and crashes).
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # Minimum length to treat the result as a usable article. Below this we assume
 # the fetch hit a paywall / JS-only page / error page and report failure so the
 # caller can route the lead to review instead of spending tokens on opencode.

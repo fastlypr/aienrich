@@ -192,7 +192,8 @@ def process_lead(idx, full_name, article_url, linkedin, email, username, limiter
     try:
         fetch = subprocess.run(
             [PY, os.path.join(SCRIPT_DIR, "fetch_article.py"), article_url],
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         return (idx, "review", email, "FETCH_FAILED(timeout)", "", "")
@@ -205,7 +206,8 @@ def process_lead(idx, full_name, article_url, linkedin, email, username, limiter
             [PY, os.path.join(SCRIPT_DIR, "personalize_llm.py"),
              "--full_name", full_name, "--article_url", article_url,
              "--linkedin", linkedin, "--email", email, "--username", username],
-            input=fetch.stdout, capture_output=True, text=True, timeout=timeout,
+            input=fetch.stdout, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         return (idx, "failed", email, "llm_timeout", "", "")

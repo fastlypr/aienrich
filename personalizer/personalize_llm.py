@@ -51,6 +51,15 @@ import random
 import sys
 import time
 
+# Force UTF-8 stdio so non-ASCII article text (curly quotes, accents) works
+# under any locale — the VM's C locale otherwise defaults these to ASCII and
+# raises "'ascii' codec can't encode" when reading/writing the article.
+for _s in (sys.stdin, sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 
 def die(msg, code=1):
     sys.stderr.write(f"personalize_llm: {msg}\n")
