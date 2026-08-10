@@ -23,10 +23,15 @@ BASE_URL = "https://integrate.api.nvidia.com/v1"
 
 
 class NvidiaClient:
-    def __init__(self, api_key: str, model: str = DEFAULT_MODEL):
+    def __init__(self, api_key: str, model: str = DEFAULT_MODEL,
+                 base_url: str = BASE_URL, user_agent: str | None = None):
         if not api_key:
-            raise ValueError("NVIDIA_API_KEY not set.")
-        self._client = OpenAI(base_url=BASE_URL, api_key=api_key)
+            raise ValueError("API key not set.")
+        kwargs: dict[str, Any] = {"base_url": base_url, "api_key": api_key}
+        if user_agent:
+            # Some gateways (e.g. Cloudflare) 403 the SDK's default UA.
+            kwargs["default_headers"] = {"User-Agent": user_agent}
+        self._client = OpenAI(**kwargs)
         self.model = model
 
     def chat(

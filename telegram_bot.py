@@ -76,6 +76,19 @@ NVIDIA_MODELS = [
     "mistralai/mistral-small-4-119b-2603",
 ]
 
+# OpenCode Zen (opencode.ai/zen/go) — OpenAI-compatible /chat/completions.
+OPENCODE_BASE = "https://opencode.ai/zen/go/v1"
+OPENCODE_MODELS = [
+    "gpt-5.6-luna", "grok-4.5", "deepseek-v4-pro", "deepseek-v4-flash",
+    "kimi-k3", "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5",
+    "glm-5.2", "glm-5.1", "glm-5",
+    "minimax-m3", "minimax-m2.7", "minimax-m2.5",
+    "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.5-plus",
+    "mimo-v2-pro", "mimo-v2-omni", "mimo-v2.5-pro", "mimo-v2.5",
+    "hy3", "hy3-preview",
+]
+ALL_MODELS = NVIDIA_MODELS + OPENCODE_MODELS
+
 _URL_RE = re.compile(r"https?://\S+", re.I)
 
 
@@ -234,8 +247,9 @@ def mode_menu() -> list:
 
 
 def model_menu() -> list:
-    rows = [[{"text": m.split("/")[-1], "callback_data": f"model:{i}"}]
-            for i, m in enumerate(NVIDIA_MODELS)]
+    rows = [[{"text": ("🟢 " if m in OPENCODE_MODELS else "🔵 ") + m.split("/")[-1],
+              "callback_data": f"model:{i}"}]
+            for i, m in enumerate(ALL_MODELS)]
     rows.append([{"text": "⬅️ Back", "callback_data": "m:set"}])
     return rows
 
@@ -255,8 +269,12 @@ class App:
         return config.load()
 
     def client(self, cfg: dict) -> NvidiaClient:
-        key = cfg.get("nvidia_api_key") or os.getenv("NVIDIA_API_KEY", "")
         model = cfg.get("nvidia_model") or NVIDIA_MODELS[0]
+        if model in OPENCODE_MODELS:
+            key = cfg.get("opencode_api_key") or os.getenv("OPENCODE_API_KEY", "")
+            return NvidiaClient(api_key=key, model=model, base_url=OPENCODE_BASE,
+                                user_agent="aienrich/1.0")
+        key = cfg.get("nvidia_api_key") or os.getenv("NVIDIA_API_KEY", "")
         return NvidiaClient(api_key=key, model=model)
 
     def do_search_fn(self, cfg: dict, stats: Stats):
@@ -897,9 +915,9 @@ class App:
 
         if data.startswith("model:"):
             idx = int(data.split(":")[1])
-            cfg["nvidia_model"] = NVIDIA_MODELS[idx]
+            cfg["nvidia_model"] = ALL_MODELS[idx]
             config.save(cfg)
-            log.info("⚙ model → %s", NVIDIA_MODELS[idx])
+            log.info("⚙ model → %s", ALL_MODELS[idx])
             nav("⚙️ Settings", settings_menu(cfg)); return
 
         if data.startswith("col:"):
