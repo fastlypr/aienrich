@@ -559,7 +559,8 @@ class App:
         self.bot.send_document(chat, Path(out), caption=Path(out).name)
 
     # -- personalizer (vendored cold-emails scripts, run as-is)
-    def start_personalizer(self, chat: int, source: str, mode: str) -> None:
+    def start_personalizer(self, chat: int, source: str, mode: str,
+                           force_retry: bool = False) -> None:
         """Map the article/name columns (ask if unsure), then run."""
         try:
             headers = fetch_sheet.get_headers(source)
@@ -576,9 +577,11 @@ class App:
         log.info("✍ pz headers=%s · article=%r · name=%r · username=%r",
                  headers, article_col, name_col, username_col)
         if article_col:
-            self.run_personalizer(chat, source, mode, name_col, article_col, username_col)
+            self.run_personalizer(chat, source, mode, name_col, article_col,
+                                  username_col, force_retry=force_retry)
         else:
             self.pending[chat] = {"await": "pz_col", "mode": mode, "source": source,
+                                  "force_retry": force_retry,
                                   "headers": headers, "name_col": name_col,
                                   "username_col": username_col}
             rows = [[{"text": h, "callback_data": f"pzcol:{i}"}] for i, h in enumerate(headers)]
@@ -587,7 +590,7 @@ class App:
 
     def run_personalizer(self, chat: int, source: str, mode: str,
                          name_col: str = "", article_col: str = "",
-                         username_col: str = "") -> None:
+                         username_col: str = "", force_retry: bool = False) -> None:
         cfg = self.cfg()
         here = Path(__file__).resolve().parent
         script = here / "personalizer" / ("run_ig.py" if mode == "ig" else "run_all.py")
@@ -621,7 +624,7 @@ class App:
             env["USERNAME_COL"] = username_col
         # RETRY: '' = only redo empty/failed (resume); 'all' = redo everything
         # (set config pz_retry='all' to bypass the "already personalized" skip).
-        env["RETRY"] = cfg.get("pz_retry", "")
+        env["RETRY"] = "all" if force_retry else cfg.get("pz_retry", "")
         env.setdefault("RPM", "38")
         env.setdefault("CONCURRENCY", "5")
         env["PYTHONUNBUFFERED"] = "1"  # stream child prints live (not block-buffered)
@@ -777,6 +780,14 @@ class App:
             else:
                 self.bot.send(chat, "Send: /sheet <public Google Sheet URL>")
             return
+        if text.startswith("/test"):
+            m = _URL_RE.search(text)
+            if m and "docs.google.com" in text:
+                self.bot.send(chat, "🧪 /test — Cold Email on ALL rows (force, ignores resume-skip)")
+                self.start_personalizer(chat, m.group(0), "email", force_retry=True)
+            else:
+                self.bot.send(chat, "Send: /test <public Google Sheet URL>")
+            return
 
         # a google sheet URL pasted directly → ask what to do (never auto-run)
         if "docs.google.com/spreadsheets" in text:
@@ -878,7 +889,8 @@ class App:
                 article_col = pend["headers"][int(data.split(":")[1])]
                 self.run_personalizer(chat, pend["source"], pend["mode"],
                                       pend.get("name_col", ""), article_col,
-                                      pend.get("username_col", ""))
+                                      pend.get("username_col", ""),
+                                      force_retry=pend.get("force_retry", False))
             return
         if data == "pzdl":
             out = getattr(self, "_pz_last", None)
